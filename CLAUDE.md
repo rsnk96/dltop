@@ -5,13 +5,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`dl-gpumon` is a TUI that splits live NVIDIA GPU utilization into DL compute (CUDA/Tensor/FP*) versus media engines (NVENC/NVDEC). Target: public PyPI package — preserve backwards-compatible CLI flags and public behaviour across edits.
+`cvtop` is a TUI that splits live NVIDIA GPU utilization into DL compute (CUDA/Tensor/FP*) versus media engines (NVENC/NVDEC). Target: public PyPI package — preserve backwards-compatible CLI flags and public behaviour across edits.
 
 ## Layout
 
-Single-module project: all code lives in `dl_gpumon.py` at the repo root. This is intentional — do not split into a package (`dl_gpumon/__init__.py`, submodules, etc.) unless explicitly asked.
+Single-module project: all code lives in `cvtop.py` at the repo root. This is intentional — do not split into a package (`cvtop/__init__.py`, submodules, etc.) unless explicitly asked.
 
-Entry point: `dl-gpumon` → `dl_gpumon:main` (defined in `pyproject.toml`).
+Entry point: `cvtop` → `cvtop:main` (defined in `pyproject.toml`).
 
 ## Architecture
 
@@ -29,12 +29,13 @@ Both paths feed the same `Rich`-rendered TUI. When adding metrics, add them to b
 
 ## Commands
 
-- Install (editable): `pip install -e .`
-- Run: `dl-gpumon` (flags: `-i/--interval <sec>`, `--no-dcgm`)
+- Install (editable, with test deps): `pip install -e ".[test]"`
+- Run: `cvtop` (flags: `-i/--interval <sec>`, `--no-dcgm`) — callable from any directory once installed
 - Lint: `ruff check .`
 - Format: `black .` and `ruff check --fix .`
+- Test: `pytest` (smoke tests only — no GPU required)
 
-There is **no pytest suite and no CI**. Do not run `pytest` — it will do nothing useful. After non-trivial edits, smoke-test by running `dl-gpumon --help` and (if a GPU is present) `dl-gpumon -i 1` for a few seconds and confirming no tracebacks.
+Tests in `tests/` intentionally avoid touching NVML (they run on the GPU-less GitHub Actions runner). When adding new tests, keep them importable and CLI-level unless you also add a marker that a GPU-required integration suite can use.
 
 ## Ruff config
 

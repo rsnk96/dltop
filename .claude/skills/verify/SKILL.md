@@ -1,19 +1,17 @@
 ---
 name: verify
-description: Smoke-test dl-gpumon after edits. Runs ruff, black --check, import sanity, and `--help` invocation. Use in place of a pytest suite (there isn't one).
+description: Smoke-test cvtop after edits. Runs ruff, black --check, pytest, and `cvtop --help`. The "did I break anything obvious" check.
 ---
 
 # Verify
 
-This repo has no pytest suite. Use this skill as the "did I break anything obvious" check after edits to `dl_gpumon.py`.
-
-Run these four checks **in order**, stopping at the first failure and reporting what failed:
+Run these checks **in order**, stopping at the first failure and reporting what failed:
 
 1. **Lint** — `ruff check .`
 2. **Format** — `black --check .`
-3. **Import sanity** — `python -c "import dl_gpumon"` (catches syntax errors and import-time exceptions that lint can't)
-4. **CLI sanity** — `dl-gpumon --help` (catches regressions in the `argparse` setup and `main()` entry)
+3. **Tests** — `pytest -q` (smoke tests in `tests/`; no GPU needed)
+4. **CLI sanity** — `cvtop --help` (catches regressions in argparse / `main()` entry that import-only tests miss)
 
-If a GPU is available and the user asks for a deeper check, additionally run `timeout 3 dl-gpumon -i 1 --no-dcgm` and report whether it started cleanly without a traceback. Do not run this unprompted — it requires an NVIDIA driver and terminal control.
+If a GPU is available and the user asks for a deeper check, additionally run `timeout 3 cvtop -i 1 --no-dcgm` and report whether it started cleanly without a traceback. Do not run this unprompted — it requires an NVIDIA driver and terminal control.
 
 Report a concise pass/fail line per step. On failure, quote the exact error and stop — do not try to fix it unless asked.

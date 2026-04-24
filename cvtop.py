@@ -1,8 +1,8 @@
-"""DL-oriented GPU monitor TUI.
+"""cvtop -- a top/htop-style GPU monitor tailored for CV and AI workloads.
 
 Splits live GPU utilization into two categories:
 
-    * Compute (DL): SM active, Tensor pipe, FP32/FP16/FP64 pipes -- via DCGM profiling
+    * Compute (CV/AI): SM active, Tensor pipe, FP32/FP16/FP64 pipes -- via DCGM profiling
     * Media engines: NVENC, NVDEC -- via NVML
 
 When DCGM profiling metrics are unavailable (e.g. consumer GeForce cards where
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import math
 import select
 import shutil
 import signal
@@ -167,9 +168,9 @@ class SystemState:
     net_rx_hist: deque[float] = field(default_factory=lambda: deque(maxlen=HISTORY_LEN))
 
     # Previous counters + timestamp for rate calculation
-    _prev_disk: tuple[int, int] | None = None
-    _prev_net: tuple[int, int] | None = None
-    _prev_ts: float = 0.0
+    prev_disk: tuple[int, int] | None = None
+    prev_net: tuple[int, int] | None = None
+    prev_ts: float = 0.0
 
 
 # --------------------------------------------------------------------------------------
@@ -194,7 +195,7 @@ class UIState:
     stop: bool = False
 
 
-def _start_keyboard_thread(ui: UIState) -> threading.Thread | None:
+def _start_keyboard_thread(ui: UIState) -> threading.Thread | None:  # noqa: C901
     """Spawn a daemon thread that reads single keypresses from stdin.
 
     Keys:
@@ -326,9 +327,9 @@ def init_system() -> SystemState:
     psutil.cpu_percent(interval=None, percpu=True)
     disk = psutil.disk_io_counters()
     net = psutil.net_io_counters()
-    state._prev_disk = (disk.read_bytes, disk.write_bytes) if disk else None
-    state._prev_net = (net.bytes_recv, net.bytes_sent) if net else None
-    state._prev_ts = time.monotonic()
+    state.prev_disk = (disk.read_bytes, disk.write_bytes) if disk else None
+    state.prev_net = (net.bytes_recv, net.bytes_sent) if net else None
+    state.prev_ts = time.monotonic()
     return state
 
 
@@ -337,7 +338,7 @@ def sample_system(state: SystemState) -> None:
     if psutil is None:
         return
     now = time.monotonic()
-    dt = max(1e-3, now - state._prev_ts)
+    dt = max(1e-3, now - state.prev_ts)
 
     state.cpu_pct = psutil.cpu_percent(interval=None, percpu=False)
     state.cpu_per_core = psutil.cpu_percent(interval=None, percpu=True)
@@ -357,24 +358,24 @@ def sample_system(state: SystemState) -> None:
     state.swap_pct = sw.percent
 
     disk = psutil.disk_io_counters()
-    if disk and state._prev_disk is not None:
-        dr = (disk.read_bytes - state._prev_disk[0]) / dt / 1e6
-        dw = (disk.write_bytes - state._prev_disk[1]) / dt / 1e6
+    if disk and state.prev_disk is not None:
+        dr = (disk.read_bytes - state.prev_disk[0]) / dt / 1e6
+        dw = (disk.write_bytes - state.prev_disk[1]) / dt / 1e6
         state.disk_read_mbs = max(0.0, dr)
         state.disk_write_mbs = max(0.0, dw)
     if disk:
-        state._prev_disk = (disk.read_bytes, disk.write_bytes)
+        state.prev_disk = (disk.read_bytes, disk.write_bytes)
 
     net = psutil.net_io_counters()
-    if net and state._prev_net is not None:
-        rx = (net.bytes_recv - state._prev_net[0]) / dt / 1e6
-        tx = (net.bytes_sent - state._prev_net[1]) / dt / 1e6
+    if net and state.prev_net is not None:
+        rx = (net.bytes_recv - state.prev_net[0]) / dt / 1e6
+        tx = (net.bytes_sent - state.prev_net[1]) / dt / 1e6
         state.net_rx_mbs = max(0.0, rx)
         state.net_tx_mbs = max(0.0, tx)
     if net:
-        state._prev_net = (net.bytes_recv, net.bytes_sent)
+        state.prev_net = (net.bytes_recv, net.bytes_sent)
 
-    state._prev_ts = now
+    state.prev_ts = now
     state.cpu_hist.append(state.cpu_pct)
     state.ram_hist.append(state.ram_pct)
     state.disk_r_hist.append(state.disk_read_mbs)
@@ -395,6 +396,7 @@ class DcgmProbe:
     """
 
     def __init__(self, gpu_count: int, interval_ms: int = 500) -> None:
+        """Create a streamer for `gpu_count` GPUs sampled every `interval_ms` ms."""
         self.gpu_count = gpu_count
         self.interval_ms = interval_ms
         self.proc: subprocess.Popen[str] | None = None
@@ -410,8 +412,10 @@ class DcgmProbe:
         if shutil.which("dcgmi") is None:
             return False, "dcgmi binary not found on PATH"
         try:
+            # `dcgmi` is resolved via PATH intentionally -- the location varies by
+            # distro (/usr/bin, /usr/local/bin). The arg vector is all literals.
             r = subprocess.run(
-                ["dcgmi", "discovery", "-l"],
+                ["dcgmi", "discovery", "-l"],  # noqa: S607
                 capture_output=True,
                 text=True,
                 timeout=3,
@@ -434,8 +438,10 @@ class DcgmProbe:
         """
         fields = ",".join(str(f) for f in DCGM_FIELD_ORDER)
         try:
-            r = subprocess.run(
-                ["dcgmi", "dmon", "-e", fields, "-d", "500", "-c", "1"],
+            # `fields` is derived from the module-level DCGM_FIELD_ORDER constant,
+            # not user input. PATH lookup for `dcgmi` is intentional (see above).
+            r = subprocess.run(  # noqa: S603
+                ["dcgmi", "dmon", "-e", fields, "-d", "500", "-c", "1"],  # noqa: S607
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -452,6 +458,7 @@ class DcgmProbe:
         return True, ""
 
     def start(self) -> None:
+        """Spawn the `dcgmi dmon` subprocess and the background reader thread."""
         fields = ",".join(str(f) for f in DCGM_FIELD_ORDER)
         cmd = ["dcgmi", "dmon", "-e", fields, "-d", str(self.interval_ms)]
         logger.info("Starting DCGM stream: {}", " ".join(cmd))
@@ -466,8 +473,8 @@ class DcgmProbe:
         self._thread.start()
 
     def _reader(self) -> None:
-        assert self.proc is not None
-        assert self.proc.stdout is not None
+        if self.proc is None or self.proc.stdout is None:
+            return
         for raw in self.proc.stdout:
             line = raw.strip()
             if not line or not line.startswith("GPU "):
@@ -489,10 +496,12 @@ class DcgmProbe:
                 self.latest[gpu_idx] = snap
 
     def snapshot(self, gpu_idx: int) -> dict[str, float]:
+        """Return the most recent profiling snapshot for `gpu_idx`, or empty dict."""
         with self._lock:
             return dict(self.latest.get(gpu_idx, {}))
 
     def stop(self) -> None:
+        """Signal the reader thread to exit and terminate the `dcgmi` subprocess."""
         self._stop.set()
         if self.proc and self.proc.poll() is None:
             self.proc.terminate()
@@ -514,7 +523,8 @@ PANEL_CHROME = 8
 
 
 def _clamp_pct(pct: float) -> float:
-    if pct != pct:  # NaN
+    """Clamp a percentage to [0, 100], treating NaN as 0."""
+    if math.isnan(pct):
         return 0.0
     return max(0.0, min(100.0, pct))
 
@@ -529,7 +539,7 @@ def _bar_color(pct: float) -> str:
     return "red"
 
 
-def _ts_block(
+def _ts_block(  # noqa: PLR0912, PLR0913
     label: str,
     history: deque[float],
     current: float,
@@ -564,12 +574,10 @@ def _ts_block(
     pad = spark_width - len(data)
 
     # Per-column (eighths_filled, style) — eighths_filled in [0, height*8]
-    columns: list[tuple[int, str]] = []
-    for _ in range(pad):
-        columns.append((0, COLOR_EMPTY))
+    columns: list[tuple[int, str]] = [(0, COLOR_EMPTY) for _ in range(pad)]
     for v in data:
         vv = _clamp_pct(v)
-        eighths = int(round(vv / 100.0 * height * 8))
+        eighths = round(vv / 100.0 * height * 8)
         eighths = max(0, min(height * 8, eighths))
         cell_style = fill_color or _bar_color(vv)
         columns.append((eighths, cell_style))
@@ -661,7 +669,7 @@ def _core_heatmap(per_core: list[float]) -> Text:
     for v in per_core:
         vv = _clamp_pct(v)
         bins = len(SPARK_CHARS) - 1
-        ch = SPARK_CHARS[int(round(vv / 100.0 * bins))]
+        ch = SPARK_CHARS[round(vv / 100.0 * bins)]
         out.append(ch, style=_bar_color(vv))
     return out
 
@@ -879,7 +887,7 @@ def _collect_processes(gpus: list[GpuState]) -> list[dict]:
     return out
 
 
-def render_processes_panel(procs: list[dict], width: int) -> Panel:
+def render_processes_panel(procs: list[dict]) -> Panel:
     """nvitop-style processes panel.
 
     Fixed-width columns use `no_wrap=True` so Rich does not collapse them when
@@ -926,7 +934,7 @@ def render_processes_panel(procs: list[dict], width: int) -> Panel:
 # --------------------------------------------------------------------------------------
 
 
-def main() -> None:
+def main() -> None:  # noqa: C901, PLR0912, PLR0915, D103
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("-i", "--interval", type=float, default=0.5, help="sampling interval, seconds")
     ap.add_argument("--no-dcgm", action="store_true", help="skip DCGM probe entirely")
@@ -1043,7 +1051,7 @@ def main() -> None:
                         render_gpu_panel(g, have_profiling=have_profiling, width=width, show_transient=show_transient)
                         for g in gpus
                     )
-                renderables.append(render_processes_panel(procs, width=width))
+                renderables.append(render_processes_panel(procs))
                 if dcgm_note and show_transient:
                     remaining = TRANSIENT_NOTES_SECONDS - elapsed
                     title = Text()

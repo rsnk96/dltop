@@ -3,12 +3,26 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "dl-gpumon"
+name = "cvtop"
 version = "0.1.0"
-description = "TUI GPU monitor that splits DL compute (CUDA/Tensor/FP*) from media engines (NVENC/NVDEC)"
+description = "top/htop-style GPU monitor for CV and AI workloads -- splits CUDA/Tensor/FP* compute from NVENC/NVDEC media engines"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Nikhil", email = "nikhil@detecttechnologies.com" }]
+keywords = ["gpu", "monitoring", "nvidia", "cuda", "tui", "dcgm", "nvml", "computer-vision", "deep-learning"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Environment :: GPU :: NVIDIA CUDA",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Monitoring",
+]
 dependencies = [
     "loguru>=0.7",
     "nvidia-ml-py>=12.0",
@@ -16,11 +30,14 @@ dependencies = [
     "rich>=13.0",
 ]
 
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
 [project.scripts]
-dl-gpumon = "dl_gpumon:main"
+cvtop = "cvtop:main"
 
 [tool.setuptools]
-py-modules = ["dl_gpumon"]
+py-modules = ["cvtop"]
 
 [tool.black]
 line-length = 119
@@ -36,3 +53,22 @@ ignore = [
     "COM812",  # missing-trailing-comma (formatter handles)
     "PLR2004", # magic-value-comparison (too noisy for UI thresholds)
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# Test files legitimately use pytest asserts, import the module late, poke
+# private helpers, and shell out to the installed entry point. None of these
+# patterns indicate a real problem in test code.
+"tests/**" = [
+    "S101",    # assert is how pytest works
+    "S603",    # subprocess calls in tests are test-authored, not user input
+    "S607",    # invoking the installed entry point `cvtop` via PATH is the point
+    "SLF001",  # testing `_clamp_pct` and other underscore-prefixed helpers
+    "PLC0415", # late imports isolate import-triggering test cases
+    "INP001",  # tests/ is a pytest test root, not a namespace package
+    "D100",    # test modules don't need module docstrings
+    "D103",    # test functions are self-documenting via their names
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
