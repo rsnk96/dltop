@@ -1,4 +1,4 @@
-"""Smoke tests for cvtop.
+"""Smoke tests for dltop.
 
 Runnable on a GPU-less CI host: we never reach `init_nvml()` because `--help`
 causes argparse to exit(0) before anything else runs. Tests that need real GPU
@@ -14,16 +14,16 @@ from pathlib import Path
 
 def test_module_imports() -> None:
     """Importing the module must not touch NVML or spawn subprocesses."""
-    import cvtop
+    import dltop
 
-    assert hasattr(cvtop, "main")
-    assert callable(cvtop.main)
+    assert hasattr(dltop, "main")
+    assert callable(dltop.main)
 
 
 def test_cli_help_via_entrypoint() -> None:
-    """The installed `cvtop` console script responds to --help cleanly."""
+    """The installed `dltop` console script responds to --help cleanly."""
     result = subprocess.run(
-        ["cvtop", "--help"],
+        ["dltop", "--help"],
         capture_output=True,
         text=True,
         check=False,
@@ -35,9 +35,9 @@ def test_cli_help_via_entrypoint() -> None:
 
 
 def test_cli_help_via_module() -> None:
-    """`python -m cvtop --help` also works (invariant for editable installs)."""
+    """`python -m dltop --help` also works (invariant for editable installs)."""
     result = subprocess.run(
-        [sys.executable, "-m", "cvtop", "--help"],
+        [sys.executable, "-m", "dltop", "--help"],
         capture_output=True,
         text=True,
         check=False,
@@ -56,23 +56,23 @@ def test_readme_exists_and_is_non_trivial() -> None:
 
 def test_public_constants_are_plausible() -> None:
     """Sanity-check DCGM field constants -- catches accidental list/dict drift."""
-    import cvtop
+    import dltop
 
-    assert len(cvtop.DCGM_FIELD_ORDER) == len(cvtop.DCGM_FIELD_NAMES)
-    assert set(cvtop.DCGM_FIELD_ORDER) == set(cvtop.DCGM_FIELD_NAMES.keys())
+    assert len(dltop.DCGM_FIELD_ORDER) == len(dltop.DCGM_FIELD_NAMES)
+    assert set(dltop.DCGM_FIELD_ORDER) == set(dltop.DCGM_FIELD_NAMES.keys())
     # Names referenced elsewhere in the rendering code -- keep them stable.
     expected_names = {"sm_active", "tensor_active", "fp32_active", "fp16_active", "fp64_active"}
-    assert set(cvtop.DCGM_FIELD_NAMES.values()) == expected_names
+    assert set(dltop.DCGM_FIELD_NAMES.values()) == expected_names
 
 
 def test_clamp_pct_handles_nan_and_range() -> None:
     """Regression guard for the NaN check -- PLR0124 rewrite used math.isnan."""
     import math
 
-    import cvtop
+    import dltop
 
-    assert cvtop._clamp_pct(float("nan")) == 0.0
-    assert cvtop._clamp_pct(-5.0) == 0.0
-    assert cvtop._clamp_pct(150.0) == 100.0
-    assert cvtop._clamp_pct(42.0) == 42.0
-    assert not math.isnan(cvtop._clamp_pct(float("nan")))
+    assert dltop._clamp_pct(float("nan")) == 0.0
+    assert dltop._clamp_pct(-5.0) == 0.0
+    assert dltop._clamp_pct(150.0) == 100.0
+    assert dltop._clamp_pct(42.0) == 42.0
+    assert not math.isnan(dltop._clamp_pct(float("nan")))

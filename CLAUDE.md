@@ -5,13 +5,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`cvtop` is a TUI that splits live NVIDIA GPU utilization into DL compute (CUDA/Tensor/FP*) versus media engines (NVENC/NVDEC). Target: public PyPI package — preserve backwards-compatible CLI flags and public behaviour across edits.
+`dltop` is a TUI that splits live NVIDIA GPU utilization into DL compute (CUDA/Tensor/FP*) versus media engines (NVENC/NVDEC). Target: public PyPI package — preserve backwards-compatible CLI flags and public behaviour across edits.
 
 ## Layout
 
-Single-module project: all code lives in `cvtop.py` at the repo root. This is intentional — do not split into a package (`cvtop/__init__.py`, submodules, etc.) unless explicitly asked.
+Single-module project: all code lives in `dltop.py` at the repo root. This is intentional — do not split into a package (`dltop/__init__.py`, submodules, etc.) unless explicitly asked.
 
-Entry point: `cvtop` → `cvtop:main` (defined in `pyproject.toml`).
+Entry point: `dltop` → `dltop:main` (defined in `pyproject.toml`).
 
 ## Architecture
 
@@ -30,7 +30,7 @@ Both paths feed the same `Rich`-rendered TUI. When adding metrics, add them to b
 ## Commands
 
 - Install (editable, with test deps): `pip install -e ".[test]"`
-- Run: `cvtop` (flags: `-i/--interval <sec>`, `--no-dcgm`) — callable from any directory once installed
+- Run: `dltop` (flags: `-i/--interval <sec>`, `--no-dcgm`) — callable from any directory once installed
 - Lint: `ruff check .`
 - Format: `black .` and `ruff check --fix .`
 - Test: `pytest` (smoke tests only — no GPU required)

@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cvtop"
+name = "dltop"
 version = "0.1.0"
 description = "top/htop-style GPU monitor for CV and AI workloads -- splits CUDA/Tensor/FP* compute from NVENC/NVDEC media engines"
 readme = "README.md"
@@ -28,16 +28,18 @@ dependencies = [
     "nvidia-ml-py>=12.0",
     "psutil>=5.9",
     "rich>=13.0",
+    "textual>=0.60",
+    "textual-plotext>=0.2",
 ]
 
 [project.optional-dependencies]
 test = ["pytest>=8.0"]
 
 [project.scripts]
-cvtop = "cvtop:main"
+dltop = "dltop:main"
 
 [tool.setuptools]
-py-modules = ["cvtop"]
+py-modules = ["dltop"]
 
 [tool.black]
 line-length = 119
@@ -61,7 +63,7 @@ ignore = [
 "tests/**" = [
     "S101",    # assert is how pytest works
     "S603",    # subprocess calls in tests are test-authored, not user input
-    "S607",    # invoking the installed entry point `cvtop` via PATH is the point
+    "S607",    # invoking the installed entry point `dltop` via PATH is the point
     "SLF001",  # testing `_clamp_pct` and other underscore-prefixed helpers
     "PLC0415", # late imports isolate import-triggering test cases
     "INP001",  # tests/ is a pytest test root, not a namespace package

@@ -1,20 +1,20 @@
-# cvtop
+# dltop
 
 A `top`/`htop`-style GPU monitor, tailored for computer-vision and deep-learning workloads.
 
-Where `nvitop` gives you one uniform "SM%" bar, `cvtop` splits live GPU utilization into the two things a CV/AI engineer actually cares about on the same silicon:
+Where `nvitop` gives you one uniform "SM%" bar, `dltop` splits live GPU utilization into the two things a CV/AI engineer actually cares about on the same silicon:
 
 - **Compute lanes** — CUDA/Tensor/FP32/FP16/FP64 activity, via NVIDIA DCGM profiling fields
 - **Media engines** — NVENC (encode) and NVDEC (decode) throughput, via NVML
 
-When DCGM is unavailable (consumer GeForce cards, or DCGM not installed), `cvtop` falls back to NVML's single lumped SM% and prints a footer telling you how to enable the full split on a data-center GPU.
+When DCGM is unavailable (consumer GeForce cards, or DCGM not installed), `dltop` falls back to NVML's single lumped SM% and prints a footer telling you how to enable the full split on a data-center GPU.
 
 ## Installation
 
 ### From GitHub (current)
 
 ```bash
-pip install git+https://github.com/<your-user>/cvtop
+pip install git+https://github.com/<your-user>/dltop
 ```
 
 ### From PyPI
@@ -24,7 +24,7 @@ Not yet published.
 ### For development
 
 ```bash
-git clone https://github.com/<your-user>/cvtop && cd cvtop
+git clone https://github.com/<your-user>/dltop && cd dltop
 pip install -e ".[test]"
 ```
 
@@ -32,13 +32,13 @@ Python 3.11+ required. The tool is Linux-only (needs NVML + optionally `dcgmi`).
 
 ## Usage
 
-Once installed, `cvtop` is callable from any directory — the same way `htop` is:
+Once installed, `dltop` is callable from any directory — the same way `htop` is:
 
 ```bash
-cvtop                   # 0.5s refresh, DCGM if available
-cvtop -i 1              # 1s refresh
-cvtop --no-dcgm         # NVML-only (skip DCGM even if installed)
-cvtop --help
+dltop                   # 0.5s refresh, DCGM if available
+dltop -i 1              # 1s refresh
+dltop --no-dcgm         # NVML-only (skip DCGM even if installed)
+dltop --help
 ```
 
 ### Key bindings (in the TUI)
@@ -60,7 +60,7 @@ sudo apt install datacenter-gpu-manager
 sudo systemctl --now enable nvidia-dcgm
 ```
 
-Consumer GeForce cards (RTX 4090, 3090, etc.) have these profiling fields gated by NVIDIA at the driver level — DCGM will install but return no profiling data. `cvtop` detects this at startup and falls back silently.
+Consumer GeForce cards (RTX 4090, 3090, etc.) have these profiling fields gated by NVIDIA at the driver level — DCGM will install but return no profiling data. `dltop` detects this at startup and falls back silently.
 
 ## Runtime requirements
 
