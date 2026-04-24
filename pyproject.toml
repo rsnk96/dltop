@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dl-gpumon"
+version = "0.1.0"
+description = "TUI GPU monitor that splits DL compute (CUDA/Tensor/FP*) from media engines (NVENC/NVDEC)"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Nikhil", email = "nikhil@detecttechnologies.com" }]
+dependencies = [
+    "loguru>=0.7",
+    "nvidia-ml-py>=12.0",
+    "psutil>=5.9",
+    "rich>=13.0",
+]
+
+[project.scripts]
+dl-gpumon = "dl_gpumon:main"
+
+[tool.setuptools]
+py-modules = ["dl_gpumon"]
+
+[tool.black]
+line-length = 119
+
+[tool.ruff]
+line-length = 119
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "D203",    # one-blank-line-before-class (conflicts with D211)
+    "D213",    # multi-line-summary-second-line (conflicts with D212)
+    "COM812",  # missing-trailing-comma (formatter handles)
+    "PLR2004", # magic-value-comparison (too noisy for UI thresholds)
+]
