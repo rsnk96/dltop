@@ -88,58 +88,63 @@ DCGM_INSTALL_HINT = (
     "Note: NVIDIA gates profiling fields on GeForce cards; no software toggle unlocks them."
 )
 
-# plotext accepts `"cyan+"`, `"gray+l"` etc. Textual's markup parser does not —
-# it wants plain CSS colour names / hex. This dict maps plotext → Textual so we
-# can reuse the same series definitions for both the chart and the legend dots.
-_PLOTEXT_TO_TEXTUAL = {
-    "cyan+": "cyan",
-    "magenta+": "magenta",
-    "blue+": "blue",
-    "cyan": "cyan",
-    "blue": "blue",
-    "yellow+": "yellow",
-    "orange+": "#ff9933",
-    "red+": "red",
-    "green+": "green",
-    "magenta": "magenta",
-    "white+": "white",
-    "gray+l": "grey50",
-    "black": "black",
+# Each series is rendered through two paths that have to agree visually:
+#  - plotext braille markers in the chart
+#  - a `●` swatch in the Textual legend (Rich markup)
+# Plotext renders truecolor only if `COLORTERM=truecolor`; under tmux/screen
+# (`tmux-256color`) it silently downsamples hex to 256-color and several of our
+# distinct hexes collapse to the same ANSI index. To stay distinguishable on
+# every terminal, we anchor each color to an explicit ANSI-256 index for the
+# chart and pair it with the matching exact hex for the legend.
+_PALETTE: dict[int, str] = {
+    15: "#FFFFFF",   # white
+    21: "#0000FF",   # pure blue
+    39: "#00AFFF",   # deep sky blue
+    46: "#00FF00",   # bright green
+    51: "#00FFFF",   # cyan
+    93: "#8700FF",   # bright purple
+    196: "#FF0000",  # pure red
+    201: "#FF00FF",  # magenta / hot pink
+    208: "#FF8700",  # orange
+    220: "#FFD700",  # gold
+    226: "#FFFF00",  # yellow
 }
 
 
-def _plotext_to_textual(color: str) -> str:
-    """Translate a plotext colour spec to a Textual-markup-safe name."""
-    return _PLOTEXT_TO_TEXTUAL.get(color, "white")
+def _swatch_hex(idx: int) -> str:
+    """Return the `#RRGGBB` for a palette index, for use in Textual markup."""
+    return _PALETTE[idx]
 
 
-# plotext color names for each series. Each one is a distinctive hue at braille-dot
-# resolution; values are (plotext_color, label, default_visible).
-COMPUTE_SERIES_DCGM: list[tuple[str, str, str, bool]] = [
-    ("sm", "cyan+", "SM Active", True),
-    ("tensor", "magenta+", "Tensor", True),
-    ("fp32", "blue+", "FP32", True),
-    ("fp16", "cyan", "FP16", False),
-    ("fp64", "blue", "FP64", False),
-    ("mem", "orange+", "VRAM %", True),
+# Each entry is (name, ansi256_index, label, default_visible). Indices come from
+# `_PALETTE` above and are picked for max in-tab separation on a 256-color terminal.
+SeriesDef = tuple[str, int, str, bool]
+
+COMPUTE_SERIES_DCGM: list[SeriesDef] = [
+    ("sm", 15, "SM Active", True),       # white  — overall
+    ("tensor", 201, "Tensor", True),     # magenta / hot pink
+    ("fp32", 39, "FP32", True),          # deep sky blue
+    ("fp16", 46, "FP16", True),          # green
+    ("fp64", 226, "FP64", True),         # yellow
+    ("mem", 51, "VRAM %", True),         # cyan
 ]
-COMPUTE_SERIES_NVML: list[tuple[str, str, str, bool]] = [
-    ("sm", "cyan+", "GPU (SM)", True),
-    ("mem", "orange+", "VRAM %", True),
+COMPUTE_SERIES_NVML: list[SeriesDef] = [
+    ("sm", 15, "GPU (SM)", True),
+    ("mem", 51, "VRAM %", True),
 ]
-MEDIA_SERIES: list[tuple[str, str, str, bool]] = [
-    ("mbw", "green+", "Mem BW %", True),
-    ("nvenc", "yellow+", "NVENC", True),
-    ("nvdec", "magenta+", "NVDEC", True),
-    ("power", "red+", "Power %", True),
-    ("pcie_tx", "white+", "PCIe ↑", False),
-    ("pcie_rx", "gray+l", "PCIe ↓", False),
+MEDIA_SERIES: list[SeriesDef] = [
+    ("mbw", 46, "Mem BW %", True),       # green
+    ("nvenc", 226, "NVENC", True),       # yellow
+    ("nvdec", 93, "NVDEC", True),        # purple
+    ("power", 196, "Power %", True),     # red
+    ("pcie_tx", 51, "PCIe ↑", True),     # cyan
+    ("pcie_rx", 15, "PCIe ↓", True),     # white
 ]
-SYSTEM_SERIES: list[tuple[str, str, str, bool]] = [
-    ("cpu", "cyan+", "CPU", True),
-    ("ram", "orange+", "RAM", True),
-    ("disk_r", "green+", "Disk Read (MB/s)", False),
-    ("net_rx", "magenta+", "Net RX (MB/s)", False),
+SYSTEM_SERIES: list[SeriesDef] = [
+    ("cpu", 51, "CPU", True),            # cyan
+    ("ram", 208, "RAM", True),           # orange
+    ("disk_r", 46, "Disk Read (MB/s)", True),   # green
+    ("net_rx", 201, "Net RX (MB/s)", True),     # magenta
 ]
 
 
@@ -582,8 +587,8 @@ class TimeSeriesPlot(PlotextPlot):
     }
     """
 
-    def __init__(self, series: list[tuple[str, str, str, bool]], chart_title: str, plot_id: str) -> None:
-        """Build a chart for ``series`` (name, color, label, default_visible) tuples."""
+    def __init__(self, series: list[SeriesDef], chart_title: str, plot_id: str) -> None:
+        """Build a chart for ``series`` (name, ansi256_idx, label, default_visible) tuples."""
         super().__init__(id=plot_id)
         self._series_defs = series
         self._data: dict[str, deque[tuple[float, float]]] = {
@@ -662,17 +667,16 @@ class SeriesToggles(Horizontal):
     }
     """
 
-    def __init__(self, plot_id: str, series: list[tuple[str, str, str, bool]]) -> None:
+    def __init__(self, plot_id: str, series: list[SeriesDef]) -> None:
         """Create one checkbox per series, routed to the plot with id ``plot_id``."""
         super().__init__()
         self._plot_id = plot_id
         self._series = series
 
     def compose(self) -> ComposeResult:  # noqa: D102
-        for name, color, label, default in self._series:
-            swatch = _plotext_to_textual(color)
+        for name, color_idx, label, default in self._series:
             yield Checkbox(
-                f"[{swatch}]●[/] {label}",
+                f"[{_swatch_hex(color_idx)}]●[/] {label}",
                 value=default,
                 id=f"{self._plot_id}-cb-{name}",
             )
@@ -756,7 +760,7 @@ class CvtopApp(App):
         self.dcgm_note = ""
         self.paused = False
         self._start_ts = time.monotonic()
-        self._compute_series: list[tuple[str, str, str, bool]] = []
+        self._compute_series: list[SeriesDef] = []
         self._nv_driver = ""
         self._cuda_ver = ""
 
