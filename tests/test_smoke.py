@@ -76,3 +76,37 @@ def test_clamp_pct_handles_nan_and_range() -> None:
     assert dltop._clamp_pct(150.0) == 100.0
     assert dltop._clamp_pct(42.0) == 42.0
     assert not math.isnan(dltop._clamp_pct(float("nan")))
+
+
+def test_timeseries_plot_renders_before_first_push() -> None:
+    """Regression: textual can paint TimeSeriesPlot during initial layout, before
+    on_mount or any push() runs. Plotext's default empty state used to crash
+    with IndexError under that path on short canvases.
+    """
+    import dltop
+
+    plot = dltop.TimeSeriesPlot(dltop.COMPUTE_SERIES_DCGM, "test", "compute-plot")
+    plot.plt._set_size(80, 14)
+    out = plot.plt.build()
+    assert out
+
+
+def test_render_swallows_plotext_indexerror() -> None:
+    """Regression: plotext's legend renderer has an IndexError bug at certain
+    canvas/data-shape combos. ``TimeSeriesPlot.render`` must catch it and
+    return a placeholder so the whole TUI doesn't die mid-frame.
+    """
+    from rich.text import Text
+    from textual_plotext import PlotextPlot
+
+    import dltop
+
+    plot = dltop.TimeSeriesPlot(dltop.COMPUTE_SERIES_DCGM, "boom", "compute-plot")
+    original = PlotextPlot.render
+    PlotextPlot.render = lambda self: (_ for _ in ()).throw(IndexError("simulated"))
+    try:
+        result = plot.render()
+    finally:
+        PlotextPlot.render = original
+    assert isinstance(result, Text)
+    assert "boom" in str(result)

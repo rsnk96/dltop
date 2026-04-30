@@ -597,10 +597,29 @@ class TimeSeriesPlot(PlotextPlot):
         self._visible: dict[str, bool] = {name: default for name, _, _, default in series}
         self._chart_title = chart_title
         self._y_max = 100.0
+        # Prime plotext with at least one point so the figure is never in plotext's
+        # default empty state when textual paints during initial layout.
+        self._replot()
 
     def on_mount(self) -> None:  # noqa: D102
         self.plt.date_form("H:M:S")
         self._replot()
+
+    def render(self) -> object:
+        """Render the chart, swallowing plotext's intermittent legend IndexError.
+
+        plotext's ``build_plot`` has a crash in its legend renderer at certain
+        canvas-size / data-shape combinations (the ``color[s][i]`` index in
+        ``_build.py:261``). If that fires we'd kill the whole TUI; instead we
+        return a placeholder so the rest of dltop keeps rendering and the next
+        frame typically succeeds.
+        """
+        from rich.text import Text  # noqa: PLC0415
+
+        try:
+            return super().render()
+        except IndexError:
+            return Text(f"[{self._chart_title}: rendering…]", style="dim")
 
     def push(self, samples: dict[str, float], *, ts: float | None = None) -> None:
         """Append the latest sample for any series named in ``samples``."""
