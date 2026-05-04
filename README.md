@@ -1,13 +1,20 @@
 # dltop
 
-A `top`/`htop`-style GPU monitor, tailored for computer-vision and deep-learning workloads.
+A `htop`/`nvitop`-style GPU monitor, tailored for computer-vision and deep-learning workloads.
 
-Where `nvitop` gives you one uniform "SM%" bar, `dltop` splits live GPU utilization into the two things a CV/AI engineer actually cares about on the same silicon:
+Where `nvitop` gives you one uniform compute utilization bar, `dltop` splits live GPU utilization into the two things a AI/CV engineer actually cares about on the same GPU:
 
-- **Compute lanes** — CUDA/Tensor/FP32/FP16/FP64 activity, via NVIDIA DCGM profiling fields
+- **Compute utilization** — CUDA Streaming Multiplexer/Tensor/FP32/FP16/FP64 activity
 - **Media engines** — NVENC (encode) and NVDEC (decode) throughput, via NVML
 
-When DCGM is unavailable (consumer GeForce cards, or DCGM not installed), `dltop` falls back to NVML's single lumped SM% and prints a footer telling you how to enable the full split on a data-center GPU.
+This helps identify what the choke point might be for different scales of loads on a streaming analytics pipeline. These are some sample images of the different views -
+* The Compute Tab: <img width="1902" height="1079" alt="image" src="https://github.com/user-attachments/assets/959367ce-24f7-4fc6-a434-153d62e682ad" />
+* The Media and Power Tab: <img width="1902" height="1080" alt="image" src="https://github.com/user-attachments/assets/c74bfb36-9206-4f88-928b-4d20e027976c" />
+* The System Tab: <img width="1902" height="1079" alt="image" src="https://github.com/user-attachments/assets/bb32edb6-a5e1-4f36-9a44-467601cd86d0" />
+
+
+
+When DCGM is unavailable (consumer GeForce cards, or DCGM not installed), `dltop` falls back to NVML's single lumped SM% (which is an aggregate compute utilization proxy, and the default number shown in nvidia-smi volatile memory utilization) and prints a footer telling you how to enable the full split on a data-center GPU.
 
 ## Installation
 
@@ -16,10 +23,6 @@ When DCGM is unavailable (consumer GeForce cards, or DCGM not installed), `dltop
 ```bash
 pip install git+https://github.com/<your-user>/dltop
 ```
-
-### From PyPI
-
-Not yet published.
 
 ### For development
 
@@ -49,6 +52,7 @@ dltop --help
 | `space`, `p` | Pause / unpause sampling |
 | `v`, `Tab` | Cycle view: all → gpu-only → system-only |
 | `g` / `s` / `a` | Jump directly to GPU / System / All view |
+| left arrow / right arrow | Rotate between the different views |
 
 ## Enabling the full compute split (DCGM)
 
