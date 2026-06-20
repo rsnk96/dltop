@@ -110,3 +110,25 @@ def test_render_swallows_plotext_indexerror() -> None:
         PlotextPlot.render = original
     assert isinstance(result, Text)
     assert "boom" in str(result)
+
+
+def test_lift_for_visibility_keeps_small_nonzero_series_visible() -> None:
+    """Regression: a small-but-nonzero series (e.g. NVDEC at 4% on a 0..100 axis)
+    must not collapse into the zero baseline.
+
+    Plotext colours each braille character cell by the LAST series drawn into it,
+    so a 4% line that quantises into the same bottom cell as the 0% series gets
+    overpainted and vanishes — while the numeric card still reads 4%. The lift
+    must round nonzero values UP to at least one full character cell so an active
+    engine always clears the baseline regardless of draw order. Without this, a
+    user genuinely cannot tell "NVDEC idle" from "NVDEC busy" on the chart.
+    """
+    import dltop
+
+    plot = dltop.TimeSeriesPlot(dltop.COMPUTE_SERIES_NVML, "test", "compute-plot")
+    cell = plot._y_max / plot._usable_rows()
+    lifted = plot._lift_for_visibility([0.0, 4.0, 50.0])
+
+    assert lifted[0] == 0.0, "a genuine zero must stay on the baseline"
+    assert lifted[1] >= cell, "a small nonzero value must clear at least one cell"
+    assert lifted[2] >= 50.0, "ceiling never rounds a value DOWN"

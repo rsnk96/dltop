@@ -97,12 +97,12 @@ DCGM_INSTALL_HINT = (
 # every terminal, we anchor each color to an explicit ANSI-256 index for the
 # chart and pair it with the matching exact hex for the legend.
 _PALETTE: dict[int, str] = {
-    15: "#FFFFFF",   # white
-    21: "#0000FF",   # pure blue
-    39: "#00AFFF",   # deep sky blue
-    46: "#00FF00",   # bright green
-    51: "#00FFFF",   # cyan
-    93: "#8700FF",   # bright purple
+    15: "#FFFFFF",  # white
+    21: "#0000FF",  # pure blue
+    39: "#00AFFF",  # deep sky blue
+    46: "#00FF00",  # bright green
+    51: "#00FFFF",  # cyan
+    93: "#8700FF",  # bright purple
     196: "#FF0000",  # pure red
     201: "#FF00FF",  # magenta / hot pink
     208: "#FF8700",  # orange
@@ -118,33 +118,44 @@ def _swatch_hex(idx: int) -> str:
 
 # Each entry is (name, ansi256_index, label, default_visible). Indices come from
 # `_PALETTE` above and are picked for max in-tab separation on a 256-color terminal.
+#
+# Three tabs, grouped by what an operator reasons about together:
+#   * Compute — host + GPU compute engines + media encode/decode
+#   * Memory  — host RAM, GPU VRAM, GPU VRAM bandwidth
+#   * System  — PCIe, GPU power, disk, network
 SeriesDef = tuple[str, int, str, bool]
 
+# Compute tab. The DCGM variant adds the Tensor/FP32/FP16/FP64 split that only
+# data-center GPUs expose; the NVML variant lumps it all into a single SM%.
 COMPUTE_SERIES_DCGM: list[SeriesDef] = [
-    ("sm", 15, "SM Active", True),       # white  — overall
-    ("tensor", 201, "Tensor", True),     # magenta / hot pink
-    ("fp32", 39, "FP32", True),          # deep sky blue
-    ("fp16", 46, "FP16", True),          # green
-    ("fp64", 226, "FP64", True),         # yellow
-    ("mem", 51, "VRAM %", True),         # cyan
+    ("cpu", 208, "CPU", True),  # orange
+    ("sm", 15, "GPU SM", True),  # white  — overall
+    ("tensor", 201, "Tensor", True),  # magenta / hot pink
+    ("fp32", 39, "FP32", True),  # deep sky blue
+    ("fp16", 46, "FP16", True),  # green
+    ("fp64", 226, "FP64", True),  # yellow
+    ("nvenc", 220, "NVENC", True),  # gold
+    ("nvdec", 93, "NVDEC", True),  # purple
 ]
 COMPUTE_SERIES_NVML: list[SeriesDef] = [
-    ("sm", 15, "GPU (SM)", True),
-    ("mem", 51, "VRAM %", True),
+    ("cpu", 208, "CPU", True),  # orange
+    ("sm", 15, "GPU SM", True),  # white
+    ("nvenc", 220, "NVENC", True),  # gold
+    ("nvdec", 93, "NVDEC", True),  # purple
 ]
-MEDIA_SERIES: list[SeriesDef] = [
-    ("mbw", 46, "Mem BW %", True),       # green
-    ("nvenc", 226, "NVENC", True),       # yellow
-    ("nvdec", 93, "NVDEC", True),        # purple
-    ("power", 196, "Power %", True),     # red
-    ("pcie_tx", 51, "PCIe ↑", True),     # cyan
-    ("pcie_rx", 15, "PCIe ↓", True),     # white
+MEMORY_SERIES: list[SeriesDef] = [
+    ("ram", 208, "RAM", True),  # orange
+    ("vram", 51, "GPU VRAM", True),  # cyan
+    ("mbw", 46, "GPU VRAM BW", True),  # green
 ]
 SYSTEM_SERIES: list[SeriesDef] = [
-    ("cpu", 51, "CPU", True),            # cyan
-    ("ram", 208, "RAM", True),           # orange
-    ("disk_r", 46, "Disk Read (MB/s)", True),   # green
-    ("net_rx", 201, "Net RX (MB/s)", True),     # magenta
+    ("pcie_tx", 51, "PCIe ↑", True),  # cyan
+    ("pcie_rx", 15, "PCIe ↓", True),  # white
+    ("power", 196, "GPU Power %", True),  # red
+    ("disk_r", 46, "Disk Read (MB/s)", True),  # green
+    ("disk_w", 226, "Disk Write (MB/s)", True),  # yellow
+    ("net_rx", 201, "Net RX (MB/s)", True),  # magenta
+    ("net_tx", 208, "Net TX (MB/s)", True),  # orange
 ]
 
 
@@ -642,6 +653,49 @@ class TimeSeriesPlot(PlotextPlot):
         """Public redraw entry point; call after any batch of ``push`` calls."""
         self._replot()
 
+    def _usable_rows(self) -> int:
+        """Approximate the chart's drawable height in character rows.
+
+        plotext reserves a few rows for the title, x-axis label and tick labels;
+        we subtract a fixed margin. Falls back to the CSS ``min-height`` when the
+        widget has not been laid out yet (``self.size`` is ``(0, 0)`` before the
+        first paint), so the very first prime never divides by a bogus height.
+        """
+        height = self.size.height or 14
+        return max(4, height - 5)
+
+    def _lift_for_visibility(self, ys: list[float]) -> list[float]:
+        """Round values UP (ceiling) to the draw grid, with a one-cell visibility floor.
+
+        On a fixed ``0..y_max`` axis a small-but-nonzero series (NVDEC at 4% on a
+        0..100 axis) quantises into the *same bottom braille cell* as the
+        genuinely-zero series. plotext colours each character cell by the LAST
+        series drawn into it, so a later zero-valued line (e.g. PCIe ↓) overpaints
+        the small series' cell and its line vanishes entirely — even though the
+        numeric readout still shows 4%.
+
+        Two-part fix, applied at draw time only (the ring buffers keep raw values
+        so the cards and history stay truthful):
+
+        * **ceiling** each value to the fine braille-dot resolution so lines round
+          up rather than down — activity is never floored away; and
+        * lift any nonzero value to **at least one full character cell** so an
+          active engine always clears the zero baseline and cannot be overpainted
+          by a zero-valued series, regardless of draw order.
+        """
+        rows = self._usable_rows()
+        dot_step = self._y_max / (rows * 4)  # braille packs 4 dot-rows per character cell
+        cell = self._y_max / rows
+        if dot_step <= 0:
+            return ys
+        lifted: list[float] = []
+        for v in ys:
+            if v <= 0:
+                lifted.append(0.0)
+            else:
+                lifted.append(max(math.ceil(v / dot_step) * dot_step, cell))
+        return lifted
+
     def _replot(self) -> None:
         self.plt.clear_figure()
         self.plt.title(self._chart_title)
@@ -657,7 +711,7 @@ class TimeSeriesPlot(PlotextPlot):
             if not points:
                 continue
             xs = [time.strftime("%H:%M:%S", time.localtime(t)) for t, _ in points]
-            ys = [v for _, v in points]
+            ys = self._lift_for_visibility([v for _, v in points])
             self.plt.plot(xs, ys, color=color, marker="braille", label=label)
             any_data = True
         if not any_data:
@@ -832,14 +886,16 @@ class CvtopApp(App):
             yield InfoCard(" System ", card_id="sys-card")
 
         with TabbedContent(id="tabs"):
-            with TabPane("Compute (DL)", id="tab-compute"), Vertical():
-                yield TimeSeriesPlot(self._compute_series, "DL compute pipes", plot_id="compute-plot")
+            with TabPane("Compute", id="tab-compute"), Vertical():
+                yield TimeSeriesPlot(
+                    self._compute_series, "Compute: CPU, GPU SM, encode/decode", plot_id="compute-plot"
+                )
                 yield SeriesToggles("compute-plot", self._compute_series)
-            with TabPane("Media & Power", id="tab-media"), Vertical():
-                yield TimeSeriesPlot(MEDIA_SERIES, "Media engines, memory, power", plot_id="media-plot")
-                yield SeriesToggles("media-plot", MEDIA_SERIES)
+            with TabPane("Memory", id="tab-memory"), Vertical():
+                yield TimeSeriesPlot(MEMORY_SERIES, "Memory: RAM, GPU VRAM, VRAM bandwidth", plot_id="memory-plot")
+                yield SeriesToggles("memory-plot", MEMORY_SERIES)
             with TabPane("System", id="tab-system"), Vertical():
-                yield TimeSeriesPlot(SYSTEM_SERIES, "Host CPU / RAM / IO", plot_id="system-plot")
+                yield TimeSeriesPlot(SYSTEM_SERIES, "System: PCIe, GPU power, disk, network", plot_id="system-plot")
                 yield SeriesToggles("system-plot", SYSTEM_SERIES)
 
         yield VerticalScroll(DataTable(id="procs", zebra_stripes=True))
@@ -885,65 +941,62 @@ class CvtopApp(App):
 
     def _push_series(self) -> None:
         now = time.time()
-        # Compute tab: one series set across all GPUs (we aggregate by max for multi-GPU
-        # so a hot GPU doesn't get smoothed away).
+        # Across multiple GPUs we aggregate by max so a hot GPU isn't smoothed away.
         compute_plot = self.query_one("#compute-plot", TimeSeriesPlot)
-        media_plot = self.query_one("#media-plot", TimeSeriesPlot)
+        memory_plot = self.query_one("#memory-plot", TimeSeriesPlot)
+        system_plot = self.query_one("#system-plot", TimeSeriesPlot)
 
-        mem_pct = max((g.mem_pct for g in self.gpus), default=0.0)
+        # -- Compute: host CPU + GPU compute engines + media encode/decode --------------
+        compute: dict[str, float] = {
+            "cpu": self.sys_state.cpu_pct,
+            "nvenc": max((g.nvenc_pct for g in self.gpus), default=0.0),
+            "nvdec": max((g.nvdec_pct for g in self.gpus), default=0.0),
+        }
         if self.have_profiling:
-            compute_plot.push(
-                {
-                    "sm": max((g.dcgm.get("sm_active", 0.0) for g in self.gpus), default=0.0),
-                    "tensor": max((g.dcgm.get("tensor_active", 0.0) for g in self.gpus), default=0.0),
-                    "fp32": max((g.dcgm.get("fp32_active", 0.0) for g in self.gpus), default=0.0),
-                    "fp16": max((g.dcgm.get("fp16_active", 0.0) for g in self.gpus), default=0.0),
-                    "fp64": max((g.dcgm.get("fp64_active", 0.0) for g in self.gpus), default=0.0),
-                    "mem": mem_pct,
-                },
-                ts=now,
-            )
+            compute["sm"] = max((g.dcgm.get("sm_active", 0.0) for g in self.gpus), default=0.0)
+            compute["tensor"] = max((g.dcgm.get("tensor_active", 0.0) for g in self.gpus), default=0.0)
+            compute["fp32"] = max((g.dcgm.get("fp32_active", 0.0) for g in self.gpus), default=0.0)
+            compute["fp16"] = max((g.dcgm.get("fp16_active", 0.0) for g in self.gpus), default=0.0)
+            compute["fp64"] = max((g.dcgm.get("fp64_active", 0.0) for g in self.gpus), default=0.0)
         else:
-            compute_plot.push(
-                {"sm": max((g.sm_overall_pct for g in self.gpus), default=0.0), "mem": mem_pct},
-                ts=now,
-            )
+            compute["sm"] = max((g.sm_overall_pct for g in self.gpus), default=0.0)
+        compute_plot.push(compute, ts=now)
 
+        # -- Memory: host RAM + GPU VRAM + GPU VRAM bandwidth ---------------------------
+        memory_plot.push(
+            {
+                "ram": self.sys_state.ram_pct,
+                "vram": max((g.mem_pct for g in self.gpus), default=0.0),
+                "mbw": max((g.mbw_pct for g in self.gpus), default=0.0),
+            },
+            ts=now,
+        )
+
+        # -- System: PCIe + GPU power + disk + network ----------------------------------
         agg_tx = sum(g.pcie_tx_mbs for g in self.gpus)
         agg_rx = sum(g.pcie_rx_mbs for g in self.gpus)
         max_peak = max((g.pcie_max_mbs for g in self.gpus), default=0.0)
         pcie_tx_pct = (agg_tx / max_peak * 100.0) if max_peak else 0.0
         pcie_rx_pct = (agg_rx / max_peak * 100.0) if max_peak else 0.0
-
-        media_plot.push(
+        system_plot.push(
             {
-                "mbw": max((g.mbw_pct for g in self.gpus), default=0.0),
-                "nvenc": max((g.nvenc_pct for g in self.gpus), default=0.0),
-                "nvdec": max((g.nvdec_pct for g in self.gpus), default=0.0),
+                "pcie_tx": pcie_tx_pct,
+                "pcie_rx": pcie_rx_pct,
                 "power": max(
                     ((g.power_w / g.power_limit_w * 100.0) if g.power_limit_w else 0.0 for g in self.gpus),
                     default=0.0,
                 ),
-                "pcie_tx": pcie_tx_pct,
-                "pcie_rx": pcie_rx_pct,
-            },
-            ts=now,
-        )
-
-        system_plot = self.query_one("#system-plot", TimeSeriesPlot)
-        system_plot.push(
-            {
-                "cpu": self.sys_state.cpu_pct,
-                "ram": self.sys_state.ram_pct,
                 # Disk/Net are MB/s so clamp to a generous cap for the shared 0-100 axis.
                 "disk_r": min(100.0, self.sys_state.disk_read_mbs),
+                "disk_w": min(100.0, self.sys_state.disk_write_mbs),
                 "net_rx": min(100.0, self.sys_state.net_rx_mbs),
+                "net_tx": min(100.0, self.sys_state.net_tx_mbs),
             },
             ts=now,
         )
 
         compute_plot.replot()
-        media_plot.replot()
+        memory_plot.replot()
         system_plot.replot()
 
     def _refresh_cards(self) -> None:
