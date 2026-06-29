@@ -5,8 +5,8 @@ Splits live GPU utilization into two categories:
     * Compute (CV/AI): SM active, Tensor pipe, FP32/FP16/FP64 pipes -- via DCGM profiling
     * Media engines: NVENC, NVDEC -- via NVML
 
-The UI is built on Textual with braille overlaid time-series (inspired by
-Dolphie), so many metrics share one chart instead of stacking into tall bars.
+The UI is built on Textual with box-drawing line charts (the nvtop/asciichart
+look), so many metrics share one chart instead of stacking into tall bars.
 Overlapping series are colour-interleaved per column so no line is ever hidden
 behind another while every line keeps its true value (see ``TimeSeriesPlot``).
 
@@ -61,11 +61,6 @@ except ImportError:
 HISTORY_LEN = 240  # ~2 min of samples at 0.5 s cadence
 TRANSIENT_NOTES_SECONDS = 8.0  # how long startup banners (DCGM status) stay visible
 
-# Braille canvas geometry. Each character cell packs 2 columns x 4 rows of dots.
-# BRAILLE_DOTS[col][row] is the bit for that dot (row 0 = top); OR the bits of the
-# dots lit in a cell and add the result to BRAILLE_BASE to get the glyph codepoint.
-BRAILLE_BASE = 0x2800
-BRAILLE_DOTS = ((0x01, 0x02, 0x04, 0x40), (0x08, 0x10, 0x20, 0x80))
 AXIS_STYLE = "color(244)"  # dim grey for axis ticks and labels
 
 # PCIe theoretical peak bandwidth per lane per direction (MB/s). Gen3+ uses 128b/130b
@@ -100,7 +95,7 @@ DCGM_INSTALL_HINT = (
 )
 
 # Each series is rendered through two paths that have to agree visually:
-#  - braille markers in the chart (Rich `color(<idx>)` styles)
+#  - line strokes in the chart (Rich `color(<idx>)` styles)
 #  - a `●` swatch in the Textual legend (Rich markup)
 # Terminals render truecolor only if `COLORTERM=truecolor`; under tmux/screen
 # (`tmux-256color`) hex is silently downsampled to 256-color and several of our
@@ -605,17 +600,18 @@ class TimeSeriesPlot(Widget):
     """Multi-series overlaid time-series chart with interleaved colours.
 
     Each series keeps its own ring buffer of ``(wall_timestamp, value)`` points.
-    Every paint rasterises all visible series onto one shared braille canvas at
-    their *true* vertical positions.
+    Every paint rasterises all visible series as box-drawing strokes
+    (``─ ╭ ╮ ╰ ╯ │``, the crisp continuous look of nvtop/asciichart) onto one
+    shared character canvas at their *true* vertical positions.
 
     A terminal cell can hold only one foreground colour, painted by whichever
     series draws into it last — so plain overlaying hides every line but the
     last whenever two share a cell (e.g. several idle engines all at 0%). We
-    instead **interleave**: a cell's dots are the union of every series passing
-    through it (so the line shape stays continuous), but its colour rotates
-    between those series by column index. No line is ever fully hidden, and —
-    unlike a vertical offset — every line keeps its real value, so the y-axis
-    still means what it says.
+    instead **interleave**: every series passing through a cell is recorded, the
+    line shape stays continuous, but the cell's colour rotates between those
+    series by column index. No line is ever fully hidden, and — unlike a
+    vertical offset — every line keeps its real value, so the y-axis still
+    means what it says.
     """
 
     DEFAULT_CSS = """
@@ -625,7 +621,12 @@ class TimeSeriesPlot(Widget):
     }
     """
 
-    def __init__(self, series: list[SeriesDef], chart_title: str, plot_id: str) -> None:
+    def __init__(
+        self,
+        series: list[SeriesDef],
+        chart_title: str,
+        plot_id: str,
+    ) -> None:
         """Build a chart for ``series`` (name, ansi256_idx, label, default_visible) tuples."""
         super().__init__(id=plot_id)
         self._series_defs = series
@@ -691,38 +692,77 @@ class TimeSeriesPlot(Widget):
             out.append(values[lo] * (1.0 - frac) + values[hi] * frac)
         return out
 
+    @staticmethod
+    def _mark(
+        glyphs: dict[tuple[int, int], str],
+        owners: dict[tuple[int, int], list[int]],
+        cell: tuple[int, int],
+        glyph: str,
+        sidx: int,
+    ) -> None:
+        """Place ``glyph`` in ``cell`` and record ``sidx`` as passing through it.
+
+        A corner/vertical wins over a plain "─" so a line crossing a flat run
+        stays visually connected; the series index is always appended (even when
+        the glyph isn't overwritten) so colour interleaving still sees every owner.
+        """
+        existing = glyphs.get(cell)
+        if existing is None or existing == "─":
+            glyphs[cell] = glyph
+        holders = owners.setdefault(cell, [])
+        if sidx not in holders:
+            holders.append(sidx)
+
+    def _mark_edge(
+        self,
+        glyphs: dict[tuple[int, int], str],
+        owners: dict[tuple[int, int], list[int]],
+        cell: tuple[int, int],
+        prev: int | None,
+        sidx: int,
+    ) -> None:
+        """Draw one column of the box-drawing line edge: "─", "│", corners "╭╮╰╯"."""
+        cx, cy = cell
+        if prev is None or prev == cy:
+            self._mark(glyphs, owners, (cx, cy), "─", sidx)
+        elif cy < prev:  # line rising: corner up on the left, down-turn at the top
+            self._mark(glyphs, owners, (cx, prev), "╯", sidx)
+            self._mark(glyphs, owners, (cx, cy), "╭", sidx)
+            for yy in range(cy + 1, prev):
+                self._mark(glyphs, owners, (cx, yy), "│", sidx)
+        else:  # line falling
+            self._mark(glyphs, owners, (cx, prev), "╮", sidx)
+            self._mark(glyphs, owners, (cx, cy), "╰", sidx)
+            for yy in range(prev + 1, cy):
+                self._mark(glyphs, owners, (cx, yy), "│", sidx)
+
     def _rasterize(
         self,
         vis: list[tuple[str, int, str]],
-        dots_w: int,
-        dots_h: int,
-    ) -> tuple[dict[tuple[int, int], int], dict[tuple[int, int], list[int]]]:
-        """Plot every visible series onto a braille dot-grid.
+        plot_w: int,
+        plot_h: int,
+    ) -> tuple[dict[tuple[int, int], str], dict[tuple[int, int], list[int]]]:
+        """Plot every visible series as box-drawing strokes (the nvtop/asciichart look).
 
-        Returns ``(bits, owners)`` keyed by character cell: ``bits`` is the union
-        of braille dots lit in that cell (the combined line shape) and ``owners``
-        is the ordered list of series indices passing through it, which drives the
+        One glyph per character cell: "─" for a flat step, "│" for a vertical run,
+        and rounded corners "╭ ╮ ╰ ╯" where the line turns. Returns ``(glyphs,
+        owners)`` keyed by cell: ``glyphs`` is the line shape and ``owners`` is the
+        ordered list of series indices passing through each cell, which drives the
         colour interleaving in :meth:`_build_chart`.
         """
-        bits: dict[tuple[int, int], int] = {}
+        glyphs: dict[tuple[int, int], str] = {}
         owners: dict[tuple[int, int], list[int]] = {}
+        rows = max(1, plot_h - 1)
         for sidx, (name, _, _) in enumerate(vis):
-            ys = self._resample([v for _, v in self._data[name]], dots_w)
+            ys = self._resample([v for _, v in self._data[name]], plot_w)
             prev: int | None = None
-            for dx in range(dots_w):
-                value = ys[dx] if math.isfinite(ys[dx]) else 0.0
+            for cx in range(plot_w):
+                value = ys[cx] if math.isfinite(ys[cx]) else 0.0
                 frac = min(1.0, max(0.0, value / self._y_max))
-                dy = round((1.0 - frac) * (dots_h - 1))
-                # Connect to the previous column so the line is continuous, not dotted.
-                span = (dy,) if prev is None else range(min(prev, dy), max(prev, dy) + 1)
-                for yy in span:
-                    key = (dx // 2, yy // 4)
-                    bits[key] = bits.get(key, 0) | BRAILLE_DOTS[dx % 2][yy % 4]
-                    holders = owners.setdefault(key, [])
-                    if sidx not in holders:
-                        holders.append(sidx)
-                prev = dy
-        return bits, owners
+                cy = round((1.0 - frac) * rows)
+                self._mark_edge(glyphs, owners, (cx, cy), prev, sidx)
+                prev = cy
+        return glyphs, owners
 
     def _build_chart(self) -> RenderableType:
         width = self.size.width or 80
@@ -734,7 +774,7 @@ class TimeSeriesPlot(Widget):
         plot_w = max(8, width - gutter)
         plot_h = max(3, height - 2)  # leave a row for the title and the time axis
         vis = self._visible_series()
-        bits, owners = self._rasterize(vis, plot_w * 2, plot_h * 4)
+        glyphs, owners = self._rasterize(vis, plot_w, plot_h)
         colours = [c for _, c, _ in vis]
 
         # In-chart legend in the top-left corner: one "● label" per visible series,
@@ -764,13 +804,13 @@ class TimeSeriesPlot(Widget):
                 line.append(" " * (legend_w - 3 - len(label)))  # pad to align the column
                 start_cx = legend_w
             for cx in range(start_cx, plot_w):
-                mask = bits.get((cx, cy))
-                if not mask:
+                glyph = glyphs.get((cx, cy))
+                if not glyph:
                     line.append(" ")
                     continue
                 holders = owners[(cx, cy)]
                 winner = holders[cx % len(holders)]  # rotate colour by column -> interleave
-                line.append(chr(BRAILLE_BASE + mask), style=f"color({colours[winner]})")
+                line.append(glyph, style=f"color({colours[winner]})")
             lines.append(line)
         lines.append(self._time_axis(width, gutter))
         return Text("\n").join(lines)
