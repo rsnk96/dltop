@@ -116,8 +116,8 @@ def test_timeseries_plot_renders_before_first_push() -> None:
 
     plot = dltop.TimeSeriesPlot(dltop.COMPUTE_SERIES_DCGM, "test", "compute-plot")
     # Pure rasterisation must not raise with empty ring buffers...
-    bits, owners = plot._rasterize(plot._visible_series(), 40, 40)
-    assert isinstance(bits, dict)
+    glyphs, owners = plot._rasterize(plot._visible_series(), 40, 40)
+    assert isinstance(glyphs, dict)
     assert isinstance(owners, dict)
     # ...and render() must return a Rich renderable rather than blow up.
     assert isinstance(plot.render(), Text)
@@ -148,7 +148,7 @@ def test_render_never_crashes_the_tui() -> None:
 
 
 def test_overlapping_series_are_never_hidden() -> None:
-    """Two series at the same value must BOTH survive on the shared braille canvas.
+    """Two series at the same value must BOTH survive on the shared line canvas.
 
     WHY: a terminal cell holds one colour, so naive last-writer-wins overlaying
     makes one of two coincident lines vanish — the classic failure where four idle
@@ -172,7 +172,7 @@ def test_overlapping_series_are_never_hidden() -> None:
 
     vis = plot._visible_series()
     idx = {name: i for i, (name, _, _) in enumerate(vis)}
-    _bits, owners = plot._rasterize(vis, 60, 40)
+    _glyphs, owners = plot._rasterize(vis, 60, 40)
 
     # Both equal-valued series must appear somewhere on the canvas (neither dropped).
     drawn = set().union(*owners.values()) if owners else set()
