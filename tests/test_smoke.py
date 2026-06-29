@@ -65,6 +65,29 @@ def test_public_constants_are_plausible() -> None:
     assert set(dltop.DCGM_FIELD_NAMES.values()) == expected_names
 
 
+def test_all_tab_combines_every_series_with_four_active() -> None:
+    """The default 'All' tab overlays every renderable series but enables only four.
+
+    WHY: 'All' is the first/default screen. If a future edit broke the concatenation
+    of the three tabs (dropping or duplicating a series) or changed the active set,
+    the user's very first view would silently lose a metric or open cluttered with
+    all 18 lines on. This pins the contract: every series present exactly once, and
+    only CPU / RAM / GPU SM / GPU VRAM visible by default.
+    """
+    import dltop
+
+    app = dltop.CvtopApp(interval=0.5, no_dcgm=True)
+    app._compute_series = dltop.COMPUTE_SERIES_DCGM  # set by _prepare_sources() at compose time
+    series = app._all_series()
+    names = [name for name, _, _, _ in series]
+
+    expected = {name for name, _, _, _ in (*dltop.COMPUTE_SERIES_DCGM, *dltop.MEMORY_SERIES, *dltop.SYSTEM_SERIES)}
+    assert set(names) == expected, "All tab must contain every renderable series"
+    assert len(names) == len(set(names)), "no series may appear twice"
+    on_by_default = {name for name, _, _, default in series if default}
+    assert on_by_default == {"cpu", "ram", "sm", "vram"}
+
+
 def test_clamp_pct_handles_nan_and_range() -> None:
     """Regression guard for the NaN check -- PLR0124 rewrite used math.isnan."""
     import math
@@ -79,56 +102,83 @@ def test_clamp_pct_handles_nan_and_range() -> None:
 
 
 def test_timeseries_plot_renders_before_first_push() -> None:
-    """Regression: textual can paint TimeSeriesPlot during initial layout, before
-    on_mount or any push() runs. Plotext's default empty state used to crash
-    with IndexError under that path on short canvases.
+    """Textual can paint TimeSeriesPlot during initial layout, before any push() runs.
+
+    WHY: the widget is composed inside a TabbedContent and gets a paint pass while
+    its ring buffers are still empty. If rasterising empty series raised (the old
+    plotext empty-state IndexError did, on short canvases), the whole TUI dies on
+    the first frame. This guards the empty-data path: it must yield a valid canvas
+    and a renderable, never an exception.
     """
+    from rich.text import Text
+
     import dltop
 
     plot = dltop.TimeSeriesPlot(dltop.COMPUTE_SERIES_DCGM, "test", "compute-plot")
-    plot.plt._set_size(80, 14)
-    out = plot.plt.build()
-    assert out
+    # Pure rasterisation must not raise with empty ring buffers...
+    bits, owners = plot._rasterize(plot._visible_series(), 40, 40)
+    assert isinstance(bits, dict)
+    assert isinstance(owners, dict)
+    # ...and render() must return a Rich renderable rather than blow up.
+    assert isinstance(plot.render(), Text)
 
 
-def test_render_swallows_plotext_indexerror() -> None:
-    """Regression: plotext's legend renderer has an IndexError bug at certain
-    canvas/data-shape combos. ``TimeSeriesPlot.render`` must catch it and
-    return a placeholder so the whole TUI doesn't die mid-frame.
+def test_render_never_crashes_the_tui() -> None:
+    """``TimeSeriesPlot.render`` must swallow any draw error and return a placeholder.
+
+    WHY: render runs every ~0.5 s for the life of the process. A single malformed
+    frame (a transient size of 0, a bad sample, a library edge case) must never
+    propagate out of render() — that would tear down the entire monitor. The
+    placeholder keeps the chart slot alive so the next frame can recover.
     """
     from rich.text import Text
-    from textual_plotext import PlotextPlot
 
     import dltop
 
     plot = dltop.TimeSeriesPlot(dltop.COMPUTE_SERIES_DCGM, "boom", "compute-plot")
-    original = PlotextPlot.render
-    PlotextPlot.render = lambda self: (_ for _ in ()).throw(IndexError("simulated"))
-    try:
-        result = plot.render()
-    finally:
-        PlotextPlot.render = original
+
+    def explode() -> object:
+        msg = "simulated draw failure"
+        raise RuntimeError(msg)
+
+    plot._build_chart = explode  # type: ignore[method-assign]
+    result = plot.render()
     assert isinstance(result, Text)
     assert "boom" in str(result)
 
 
-def test_lift_for_visibility_keeps_small_nonzero_series_visible() -> None:
-    """Regression: a small-but-nonzero series (e.g. NVDEC at 4% on a 0..100 axis)
-    must not collapse into the zero baseline.
+def test_overlapping_series_are_never_hidden() -> None:
+    """Two series at the same value must BOTH survive on the shared braille canvas.
 
-    Plotext colours each braille character cell by the LAST series drawn into it,
-    so a 4% line that quantises into the same bottom cell as the 0% series gets
-    overpainted and vanishes — while the numeric card still reads 4%. The lift
-    must round nonzero values UP to at least one full character cell so an active
-    engine always clears the baseline regardless of draw order. Without this, a
-    user genuinely cannot tell "NVDEC idle" from "NVDEC busy" on the chart.
+    WHY: a terminal cell holds one colour, so naive last-writer-wins overlaying
+    makes one of two coincident lines vanish — the classic failure where four idle
+    engines all sit at 0% but only one colour shows. The renderer instead records
+    every series passing through a cell in ``owners`` and interleaves their colours
+    by column, so none is hidden while each keeps its true value. If a future edit
+    drops a coincident series from ``owners`` (e.g. overwrites instead of appends),
+    a user could no longer tell "NVDEC idle" from "all engines but one idle".
     """
+    import time
+
     import dltop
 
     plot = dltop.TimeSeriesPlot(dltop.COMPUTE_SERIES_NVML, "test", "compute-plot")
-    cell = plot._y_max / plot._usable_rows()
-    lifted = plot._lift_for_visibility([0.0, 4.0, 50.0])
+    names = [s[0] for s in dltop.COMPUTE_SERIES_NVML]
+    now = time.time()
+    # First two series share the exact same value; the rest sit at 0%.
+    values = {names[0]: 50.0, names[1]: 50.0, names[2]: 0.0, names[3]: 0.0}
+    for name, val in values.items():
+        plot._data[name].extend([(now, val), (now + 1, val)])
 
-    assert lifted[0] == 0.0, "a genuine zero must stay on the baseline"
-    assert lifted[1] >= cell, "a small nonzero value must clear at least one cell"
-    assert lifted[2] >= 50.0, "ceiling never rounds a value DOWN"
+    vis = plot._visible_series()
+    idx = {name: i for i, (name, _, _) in enumerate(vis)}
+    _bits, owners = plot._rasterize(vis, 60, 40)
+
+    # Both equal-valued series must appear somewhere on the canvas (neither dropped).
+    drawn = set().union(*owners.values()) if owners else set()
+    assert idx[names[0]] in drawn, "first coincident series was hidden"
+    assert idx[names[1]] in drawn, "second coincident series was hidden"
+    # And at least one shared cell must list BOTH, so colour interleaving can show them.
+    assert any(
+        idx[names[0]] in holders and idx[names[1]] in holders for holders in owners.values()
+    ), "coincident series never share a cell -> interleaving cannot reveal both"
