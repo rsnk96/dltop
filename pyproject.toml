@@ -29,11 +29,11 @@ dependencies = [
     "psutil>=5.9",
     "rich>=13.0",
     "textual>=0.60",
-    "textual-plotext>=0.2",
 ]
 
 [project.optional-dependencies]
 test = ["pytest>=8.0"]
+screenshots = ["cairosvg>=2.7"]
 
 [project.scripts]
 dltop = "dltop:main"
@@ -69,6 +69,15 @@ ignore = [
     "INP001",  # tests/ is a pytest test root, not a namespace package
     "D100",    # test modules don't need module docstrings
     "D103",    # test functions are self-documenting via their names
+]
+# Dev utilities (screenshot/demo tooling), not shipped in the package.
+"scripts/**" = [
+    "T201",    # print() is the script's user-facing output
+    "INP001",  # scripts/ is not an importable package
+    "SLF001",  # poking dltop internals (_refresh_cards, _collect_processes) is the point
+    "ANN401",  # process dicts are heterogeneous
+    "D103",    # local helpers are self-documenting
+    "PLC0415", # cairosvg imported late so it stays an optional extra
 ]
 
 [tool.pytest.ini_options]

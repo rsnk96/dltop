@@ -2,32 +2,53 @@
 
 A `htop`/`nvitop`-style GPU monitor, tailored for computer-vision and deep-learning workloads.
 
-Where `nvitop` gives you one uniform compute utilization bar, `dltop` splits live GPU utilization into the two things a AI/CV engineer actually cares about on the same GPU:
+Where `nvitop` gives you one uniform compute-utilization bar, `dltop` splits live GPU utilization into the two things an AI/CV engineer actually cares about on the same GPU:
 
-- **Compute utilization** — CUDA Streaming Multiplexer/Tensor/FP32/FP16/FP64 activity
-- **Media engines** — NVENC (encode) and NVDEC (decode) throughput, via NVML
+- **Compute utilization** — CUDA Streaming Multiprocessor / Tensor / FP32 / FP16 / FP64 activity (via DCGM)
+- **Media engines** — NVENC (encode) and NVDEC (decode) throughput (via NVML)
 
-This helps identify what the choke point might be for different scales of loads on a streaming analytics pipeline. These are some sample images of the different views -
-* The Compute Tab: <img width="1902" height="1079" alt="image" src="https://github.com/user-attachments/assets/959367ce-24f7-4fc6-a434-153d62e682ad" />
-* The Media and Power Tab: <img width="1902" height="1080" alt="image" src="https://github.com/user-attachments/assets/c74bfb36-9206-4f88-928b-4d20e027976c" />
-* The System Tab: <img width="1902" height="1079" alt="image" src="https://github.com/user-attachments/assets/bb32edb6-a5e1-4f36-9a44-467601cd86d0" />
+This helps identify the choke point for different scales of load on a streaming-analytics pipeline. Many metrics share **one interleaved chart** instead of stacking into tall bars: overlapping series alternate colour cell-by-cell, so no line is ever hidden behind another while each keeps its true value.
 
+When DCGM is unavailable (consumer GeForce cards, or DCGM not installed), `dltop` falls back to NVML's single lumped SM% (the aggregate compute-utilization proxy shown by `nvidia-smi`) and prints a footer telling you how to enable the full split on a data-center GPU.
 
+## Screenshots
 
-When DCGM is unavailable (consumer GeForce cards, or DCGM not installed), `dltop` falls back to NVML's single lumped SM% (which is an aggregate compute utilization proxy, and the default number shown in nvidia-smi volatile memory utilization) and prints a footer telling you how to enable the full split on a data-center GPU.
+Captured on an H100 mid-training. Four tabs, all on one shared time-series axis.
+
+### All
+The default overview — every metric on one axis, with **CPU, RAM, GPU SM and GPU VRAM** on by default. Glance once: is anything busy?
+
+<img src="https://raw.githubusercontent.com/rsnk96/dltop/main/assets/screenshots/all.png" alt="dltop — All tab" width="100%">
+
+### Compute
+Host CPU plus the GPU compute engines. On data-center GPUs the DCGM split breaks SM into **Tensor, FP32, FP16 and FP64** — see exactly which math your model is doing.
+
+<img src="https://raw.githubusercontent.com/rsnk96/dltop/main/assets/screenshots/compute.png" alt="dltop — Compute tab" width="100%">
+
+### Memory
+Host **RAM**, GPU **VRAM** and **VRAM bandwidth** — watch memory fill as a model loads and catch bandwidth saturation.
+
+<img src="https://raw.githubusercontent.com/rsnk96/dltop/main/assets/screenshots/memory.png" alt="dltop — Memory tab" width="100%">
+
+### System
+**PCIe** in/out, GPU **power** draw, **disk** and **network** — the plumbing around the GPU.
+
+<img src="https://raw.githubusercontent.com/rsnk96/dltop/main/assets/screenshots/system.png" alt="dltop — System tab" width="100%">
+
+> The screenshots above are stored via [Git LFS](https://git-lfs.com), so a plain clone (or a `pip install` from Git) only pulls tiny pointer files unless you explicitly fetch the LFS objects. Regenerate them anytime with `pip install -e ".[screenshots]"` then `python scripts/capture_screenshots.py`.
 
 ## Installation
 
 ### From GitHub (current)
 
 ```bash
-pip install git+https://github.com/<your-user>/dltop
+pip install git+https://github.com/rsnk96/dltop
 ```
 
 ### For development
 
 ```bash
-git clone https://github.com/<your-user>/dltop && cd dltop
+git clone https://github.com/rsnk96/dltop && cd dltop
 pip install -e ".[test]"
 ```
 
@@ -49,14 +70,29 @@ dltop --help
 | Key | Action |
 |---|---|
 | `q`, `Q` | Quit |
-| `space`, `p` | Pause / unpause sampling |
-| `v`, `Tab` | Cycle view: all → gpu-only → system-only |
-| `g` / `s` / `a` | Jump directly to GPU / System / All view |
-| left arrow / right arrow | Rotate between the different views |
+| `space`, `p` | Pause / resume sampling |
+
+Switch tabs (**All · Compute · Memory · System**) by clicking them, or with `←` / `→` when the tab bar is focused. Each chart has per-series checkboxes underneath to toggle individual lines on or off.
+
+## Related projects
+
+`dltop` owes a lot to the terminal monitors that came before it:
+
+- [htop](https://htop.dev) — the classic interactive process and CPU monitor.
+- [btop](https://github.com/aristocratos/btop) — a polished all-round system monitor (CPU, memory, disk, network).
+- [nvtop](https://github.com/Syllo/nvtop) — an htop-style monitor for AMD / NVIDIA / Intel GPUs.
+- [nvitop](https://github.com/XuehaiPan/nvitop) — an interactive NVIDIA GPU process viewer.
+
+We use and admire all of these. None of them, individually or together, met the needs we had internally: a single view that splits GPU compute into the lanes a CV/AI engineer reasons about — SM, Tensor, FP16/FP32/FP64 — **and** the media engines (NVENC/NVDEC), overlaid against host CPU/RAM/IO on one time-series, so you can see where a streaming-analytics pipeline actually bottlenecks. So we built `dltop`.
+
+## Roadmap
+
+- [ ] **Prometheus scraping** — graph any local metric exposed on a Prometheus-friendly `/metrics` endpoint, plotted alongside the built-in GPU and host series.
+- [ ] **Stats tab** — a tab with a table documenting every metric and its summary statistics over the current window: average, standard deviation, min and max.
 
 ## Enabling the full compute split (DCGM)
 
-On a data-center GPU (A100, H100, L4, T4, etc.) you can install DCGM to unlock per-lane breakdown:
+On a data-center GPU (A100, H100, L4, T4, etc.) you can install DCGM to unlock the per-lane breakdown:
 
 ```bash
 # Ubuntu / Debian
@@ -69,7 +105,7 @@ Consumer GeForce cards (RTX 4090, 3090, etc.) have these profiling fields gated 
 ## Runtime requirements
 
 - NVIDIA driver + CUDA runtime (any version supported by `nvidia-ml-py`)
-- DCGM service (optional, for full compute-lane split)
+- DCGM service (optional, for the full compute-lane split)
 - A terminal (TTY) if you want the keyboard shortcuts — piping to a non-TTY still renders frames but disables keystroke handling
 
 ## License
