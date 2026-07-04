@@ -58,10 +58,12 @@ except ImportError:
 # Constants
 # --------------------------------------------------------------------------------------
 
-HISTORY_LEN = 240  # ~2 min of samples at 0.5 s cadence
+HISTORY_LEN = 600  # ring-buffer capacity per series; one slot per display column, no resampling
 TRANSIENT_NOTES_SECONDS = 8.0  # how long startup banners (DCGM status) stay visible
 
 AXIS_STYLE = "color(244)"  # dim grey for axis ticks and labels
+START_MARKER_GLYPH = "┊"  # dotted vertical rule marking when dltop started logging
+START_MARKER_STYLE = "dim color(244)"
 
 # PCIe theoretical peak bandwidth per lane per direction (MB/s). Gen3+ uses 128b/130b
 # encoding (hence the non-round numbers); see PCI-SIG spec.
@@ -582,6 +584,11 @@ class InfoCard(Static):
         margin: 0 1 0 0;
         content-align: left top;
     }
+    InfoCard:last-of-type {
+        /* the margin above spaces cards apart; drop it on the last one so the row's
+        right inset matches its left instead of doubling up with the row's own padding */
+        margin-right: 0;
+    }
     """
 
     def __init__(self, title: str, card_id: str) -> None:
@@ -671,26 +678,21 @@ class TimeSeriesPlot(Widget):
         """Return ``(name, colour, label)`` for every currently-visible series."""
         return [(n, c, lbl) for (n, c, lbl, _) in self._series_defs if self._visible.get(n)]
 
-    @staticmethod
-    def _resample(values: list[float], width: int) -> list[float]:
-        """Stretch/compress ``values`` to exactly ``width`` points by linear interpolation.
+    def _visible_slice(self, name: str, width: int) -> tuple[list[tuple[float, float]], int]:
+        """Return the last ``width`` samples for ``name`` plus their left column offset.
 
-        All series are pushed in lockstep (same count, same timestamps), so a
-        uniform stretch keeps them time-aligned with one another on the canvas.
+        One buffer slot per display column, no resampling -- ``offset`` is how many
+        columns on the left are still blank (0 once ``name`` has ``width`` samples).
         """
-        n = len(values)
-        if n == 0:
-            return [0.0] * width
-        if n == 1 or width == 1:
-            return [values[-1]] * width
-        out: list[float] = []
-        for i in range(width):
-            pos = i * (n - 1) / (width - 1)
-            lo = int(pos)
-            hi = min(n - 1, lo + 1)
-            frac = pos - lo
-            out.append(values[lo] * (1.0 - frac) + values[hi] * frac)
-        return out
+        buf = list(self._data[name])[-width:] if width > 0 else []
+        return buf, width - len(buf)
+
+    def _marker_column(self, plot_w: int) -> int | None:
+        """Column of the "logging started" marker, or ``None`` once the chart is full."""
+        if not self._series_defs:
+            return None
+        _, offset = self._visible_slice(self._series_defs[0][0], plot_w)
+        return offset if offset > 0 else None
 
     @staticmethod
     def _mark(
@@ -754,10 +756,14 @@ class TimeSeriesPlot(Widget):
         owners: dict[tuple[int, int], list[int]] = {}
         rows = max(1, plot_h - 1)
         for sidx, (name, _, _) in enumerate(vis):
-            ys = self._resample([v for _, v in self._data[name]], plot_w)
+            buf, offset = self._visible_slice(name, plot_w)
             prev: int | None = None
             for cx in range(plot_w):
-                value = ys[cx] if math.isfinite(ys[cx]) else 0.0
+                if cx < offset:  # not enough history yet to reach this column -- leave blank
+                    prev = None
+                    continue
+                _, raw = buf[cx - offset]
+                value = raw if math.isfinite(raw) else 0.0
                 frac = min(1.0, max(0.0, value / self._y_max))
                 cy = round((1.0 - frac) * rows)
                 self._mark_edge(glyphs, owners, (cx, cy), prev, sidx)
@@ -776,6 +782,7 @@ class TimeSeriesPlot(Widget):
         vis = self._visible_series()
         glyphs, owners = self._rasterize(vis, plot_w, plot_h)
         colours = [c for _, c, _ in vis]
+        marker_cx = self._marker_column(plot_w)
 
         # In-chart legend in the top-left corner: one "● label" per visible series,
         # in the series colour, overlaying the plot (as plotext's legend did). Keep
@@ -806,7 +813,10 @@ class TimeSeriesPlot(Widget):
             for cx in range(start_cx, plot_w):
                 glyph = glyphs.get((cx, cy))
                 if not glyph:
-                    line.append(" ")
+                    if cx == marker_cx:
+                        line.append(START_MARKER_GLYPH, style=START_MARKER_STYLE)
+                    else:
+                        line.append(" ")
                     continue
                 holders = owners[(cx, cy)]
                 winner = holders[cx % len(holders)]  # rotate colour by column -> interleave
@@ -962,7 +972,6 @@ class CvtopApp(App):
         self.have_profiling = False
         self.dcgm_note = ""
         self.paused = False
-        self._start_ts = time.monotonic()
         self._compute_series: list[SeriesDef] = []
         self._nv_driver = ""
         self._cuda_ver = ""
