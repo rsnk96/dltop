@@ -40,6 +40,7 @@ from textual.widgets import Checkbox, DataTable, Footer, Header, Static, TabbedC
 
 if TYPE_CHECKING:
 
+    from psutil import Process as PsutilProcess
     from rich.console import RenderableType
     from textual.app import ComposeResult
 
@@ -489,9 +490,16 @@ class DcgmProbe:
 # --------------------------------------------------------------------------------------
 
 
-def _collect_processes(gpus: list[GpuState]) -> list[dict]:
-    """Enumerate GPU processes via NVML. Annotate with psutil when available."""
+def _collect_processes(gpus: list[GpuState], proc_cache: dict[int, PsutilProcess]) -> list[dict]:
+    """Enumerate GPU processes via NVML. Annotate with psutil when available.
+
+    ``proc_cache`` must be the same dict across calls: ``psutil.Process.cpu_percent()``
+    reports a meaningful value only when called at least twice on the *same* Process
+    instance (it diffs against its own last call), so a fresh ``Process(pid)`` every
+    tick would always report 0.0. Stale pids are pruned once they drop out of view.
+    """
     out: list[dict] = []
+    live_pids: set[int] = set()
     for g in gpus:
         handle = pynvml.nvmlDeviceGetHandleByIndex(g.index)
         seen: dict[int, dict] = {}
@@ -511,6 +519,7 @@ def _collect_processes(gpus: list[GpuState]) -> list[dict]:
                     row["type"] = "C+G" if row["type"] != ptype else row["type"]
                     row["mem"] = max(row.get("mem", 0), p.usedGpuMemory or 0)
         for pid, info in seen.items():
+            live_pids.add(pid)
             entry: dict = {
                 "gpu": g.index,
                 "pid": pid,
@@ -523,13 +532,18 @@ def _collect_processes(gpus: list[GpuState]) -> list[dict]:
             }
             if psutil is not None:
                 with contextlib.suppress(psutil.Error):
-                    proc = psutil.Process(pid)
+                    proc = proc_cache.get(pid)
+                    if proc is None:
+                        proc = psutil.Process(pid)
+                        proc_cache[pid] = proc
                     entry["user"] = proc.username()
                     cmdline = proc.cmdline()
                     entry["cmd"] = " ".join(cmdline) if cmdline else proc.name()
                     entry["cpu_pct"] = proc.cpu_percent(interval=None)
                     entry["rss_mb"] = proc.memory_info().rss / 1e6
             out.append(entry)
+    for pid in proc_cache.keys() - live_pids:
+        del proc_cache[pid]
     out.sort(key=lambda r: (-r["mem_mb"], r["gpu"], r["pid"]))
     return out
 
@@ -822,27 +836,29 @@ class TimeSeriesPlot(Widget):
                 winner = holders[cx % len(holders)]  # rotate colour by column -> interleave
                 line.append(glyph, style=f"color({colours[winner]})")
             lines.append(line)
-        lines.append(self._time_axis(width, gutter))
+        lines.append(self._time_axis(width, gutter, plot_w))
         return Text("\n").join(lines)
 
-    def _time_axis(self, width: int, gutter: int) -> Text:
-        """Bottom axis: oldest sample time on the left, newest on the right."""
-        first: float | None = None
-        last: float | None = None
-        for dq in self._data.values():
-            if dq:
-                first = dq[0][0] if first is None else min(first, dq[0][0])
-                last = dq[-1][0] if last is None else max(last, dq[-1][0])
+    def _time_axis(self, width: int, gutter: int, plot_w: int) -> Text:
+        """Bottom axis: oldest *visible* sample time on the left, newest on the right.
+
+        The ring buffer holds far more history than a chart displays (see HISTORY_LEN),
+        so this must read the same on-screen slice `_rasterize` draws, not the whole
+        buffer -- otherwise the left label stays pinned to app start long after the
+        buffer has scrolled well past what's actually on screen.
+        """
         row = [" "] * width
-        if first is not None and last is not None:
-            lo = time.strftime("%H:%M:%S", time.localtime(first))
-            hi = time.strftime("%H:%M:%S", time.localtime(last))
-            for i, ch in enumerate(lo):
-                if gutter + i < width:
-                    row[gutter + i] = ch
-            for i, ch in enumerate(hi):
-                if 0 <= width - len(hi) + i < width:
-                    row[width - len(hi) + i] = ch
+        if self._series_defs:
+            buf, _ = self._visible_slice(self._series_defs[0][0], plot_w)
+            if buf:
+                lo = time.strftime("%H:%M:%S", time.localtime(buf[0][0]))
+                hi = time.strftime("%H:%M:%S", time.localtime(buf[-1][0]))
+                for i, ch in enumerate(lo):
+                    if gutter + i < width:
+                        row[gutter + i] = ch
+                for i, ch in enumerate(hi):
+                    if 0 <= width - len(hi) + i < width:
+                        row[width - len(hi) + i] = ch
         return Text("".join(row), style=AXIS_STYLE)
 
 
@@ -975,6 +991,7 @@ class CvtopApp(App):
         self._compute_series: list[SeriesDef] = []
         self._nv_driver = ""
         self._cuda_ver = ""
+        self._proc_cache: dict[int, PsutilProcess] = {}
 
     # -- bring-up --------------------------------------------------------------------
 
@@ -1234,7 +1251,7 @@ class CvtopApp(App):
         self.query_one("#sys-card", InfoCard).update_rows(sys_rows)
 
     def _refresh_procs(self) -> None:
-        procs = _collect_processes(self.gpus)
+        procs = _collect_processes(self.gpus, self._proc_cache)
         table = self.query_one("#procs", DataTable)
         table.clear()
         if not procs:
