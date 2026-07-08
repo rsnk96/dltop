@@ -27,6 +27,7 @@ from dltop.models import (
     _pct_color,
 )
 from dltop.sources.dcgm import DcgmProbe
+from dltop.sources.demo import DemoSource
 from dltop.sources.nvml import _collect_processes, init_nvml, pynvml, sample_nvml
 from dltop.sources.system import init_system, psutil, sample_system
 from dltop.widgets.cards import InfoCard
@@ -93,11 +94,28 @@ class DltopApp(App):
         Binding("space", "toggle_pause", "Pause", show=False),
     ]
 
-    def __init__(self, *, interval: float, no_dcgm: bool) -> None:
-        """Configure sampling ``interval`` (seconds) and whether to skip DCGM."""
+    def __init__(
+        self,
+        *,
+        interval: float,
+        no_dcgm: bool,
+        demo_gpus: int | None = None,
+        window_s: float = 60.0,
+        no_discover: bool = False,
+    ) -> None:
+        """Configure sampling ``interval`` (seconds) and whether to skip DCGM.
+
+        ``demo_gpus`` selects the synthetic :class:`DemoSource` in place of real NVML/DCGM
+        hardware (``None`` disables demo mode). ``window_s`` is the stats window for the
+        Table tab. ``no_discover`` disables Prometheus ``/metrics`` auto-discovery.
+        """
         super().__init__()
         self.interval = interval
         self.no_dcgm = no_dcgm
+        self.demo = DemoSource(demo_gpus) if demo_gpus else None
+        self.window_s = window_s
+        self.no_discover = no_discover
+        self._t0 = time.monotonic()
         self.store = MetricStore()
         self.gpus: list[GpuState] = []
         self.sys_state: SystemState = SystemState()
@@ -113,6 +131,13 @@ class DltopApp(App):
     # -- bring-up --------------------------------------------------------------------
 
     def _prepare_sources(self) -> None:
+        if self.demo is not None:
+            self.gpus = self.demo.init_gpus()
+            self.sys_state = SystemState()
+            self.have_profiling = True  # demo fabricates the full DCGM series
+            self._nv_driver, self._cuda_ver = "demo", "demo"
+            self._compute_series = COMPUTE_SERIES_DCGM
+            return
         self.gpus = init_nvml()
         if not self.gpus:
             sys.exit("No NVIDIA GPUs detected by NVML")
@@ -202,7 +227,7 @@ class DltopApp(App):
         yield Footer()
 
     def _header_name(self) -> str:
-        mode = "DCGM" if self.have_profiling else "NVML"
+        mode = "DEMO" if self.demo is not None else ("DCGM" if self.have_profiling else "NVML")
         return f"dltop · driver {self._nv_driver or '?'} · CUDA {self._cuda_ver or '?'} · mode: {mode}"
 
     # -- on_mount: prime things that need widgets to exist ----------------------------
@@ -233,11 +258,14 @@ class DltopApp(App):
     def _tick(self) -> None:
         if self.paused:
             return
-        for g in self.gpus:
-            sample_nvml(g)
-            if self.dcgm is not None:
-                g.dcgm = self.dcgm.snapshot(g.index)
-        sample_system(self.sys_state)
+        if self.demo is not None:
+            self.demo.sample(self.gpus, self.sys_state, time.monotonic() - self._t0)
+        else:
+            for g in self.gpus:
+                sample_nvml(g)
+                if self.dcgm is not None:
+                    g.dcgm = self.dcgm.snapshot(g.index)
+            sample_system(self.sys_state)
         self._push_series()
         self._refresh_cards()
         self._refresh_procs()
@@ -367,7 +395,7 @@ class DltopApp(App):
         self.query_one("#sys-card", InfoCard).update_rows(sys_rows)
 
     def _refresh_procs(self) -> None:
-        procs = _collect_processes(self.gpus, self._proc_cache)
+        procs = self.demo.processes() if self.demo is not None else _collect_processes(self.gpus, self._proc_cache)
         table = self.query_one("#procs", DataTable)
         table.clear()
         if not procs:
@@ -403,5 +431,6 @@ class DltopApp(App):
     def on_unmount(self) -> None:  # noqa: D102
         if self.dcgm is not None:
             self.dcgm.stop()
-        with contextlib.suppress(pynvml.NVMLError):
-            pynvml.nvmlShutdown()
+        if self.demo is None:
+            with contextlib.suppress(pynvml.NVMLError):
+                pynvml.nvmlShutdown()

@@ -47,6 +47,18 @@ def test_cli_help_via_module() -> None:
     assert "--interval" in result.stdout
 
 
+def test_cli_new_flags_in_help() -> None:
+    result = subprocess.run(["dltop", "--help"], capture_output=True, text=True, check=False, timeout=10)
+    for flag in ("--demo", "--window", "--no-discover", "--version"):
+        assert flag in result.stdout
+
+
+def test_cli_version() -> None:
+    result = subprocess.run(["dltop", "--version"], capture_output=True, text=True, check=False, timeout=10)
+    assert result.returncode == 0
+    assert result.stdout.startswith("dltop ")
+
+
 def test_readme_exists_and_is_non_trivial() -> None:
     """Guards pyproject.toml's `readme = "README.md"` claim against file loss."""
     readme = Path(__file__).resolve().parent.parent / "README.md"
