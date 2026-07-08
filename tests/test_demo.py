@@ -29,7 +29,7 @@ def test_gpu_phases_differ() -> None:
 
 
 async def test_app_runs_headless_in_demo_mode() -> None:
-    app = DltopApp(interval=0.1, no_dcgm=True, demo_gpus=2)
+    app = DltopApp(interval=0.1, no_dcgm=True, demo_gpus=2, no_discover=True)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         await pilot.pause()

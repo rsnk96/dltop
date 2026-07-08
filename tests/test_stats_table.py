@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 
 async def _demo_app_with_data() -> DltopApp:
-    return DltopApp(interval=0.05, no_dcgm=True, demo_gpus=2, window_s=60.0)
+    return DltopApp(interval=0.05, no_dcgm=True, demo_gpus=2, window_s=60.0, no_discover=True)
 
 
 async def test_table_tab_lists_host_and_per_gpu_rows() -> None:

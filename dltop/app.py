@@ -21,6 +21,7 @@ from dltop._version import __version__
 from dltop.export import CaptureMeta, GpuMeta, StatRow, host_cpu_desc
 from dltop.metrics import MetricStore
 from dltop.models import (
+    _PALETTE,
     GPU_SERIES_DCGM,
     GPU_SERIES_NVML,
     HOST_SERIES,
@@ -35,6 +36,7 @@ from dltop.models import (
 from dltop.sources.dcgm import DcgmProbe
 from dltop.sources.demo import DemoSource
 from dltop.sources.nvml import _collect_processes, init_nvml, pynvml, sample_nvml
+from dltop.sources.prometheus import PromEndpoint, PromScraper, discover
 from dltop.sources.system import init_system, psutil, sample_system
 from dltop.widgets.cards import InfoCard
 from dltop.widgets.plot import TimeSeriesPlot
@@ -136,6 +138,9 @@ class DltopApp(App):
         self.dcgm: DcgmProbe | None = None
         self.have_profiling = False
         self.dcgm_note = ""
+        self.prom_endpoints: list[PromEndpoint] = []
+        self.prom: PromScraper | None = None
+        self._prom_note = ""
         self.paused = False
         self._nv_driver = ""
         self._cuda_ver = ""
@@ -149,33 +154,43 @@ class DltopApp(App):
             self.sys_state = SystemState()
             self.have_profiling = True  # demo fabricates the full DCGM series
             self._nv_driver, self._cuda_ver = "demo", "demo"
-            return
-        self.gpus = init_nvml()
-        if not self.gpus:
-            sys.exit("No NVIDIA GPUs detected by NVML")
-        self.sys_state = init_system()
-
-        with contextlib.suppress(pynvml.NVMLError):
-            raw = pynvml.nvmlSystemGetDriverVersion()
-            self._nv_driver = raw.decode() if isinstance(raw, bytes) else raw
-        with contextlib.suppress(pynvml.NVMLError):
-            v = pynvml.nvmlSystemGetCudaDriverVersion()
-            self._cuda_ver = f"{v // 1000}.{(v % 1000) // 10}"
-
-        if self.no_dcgm:
-            self.dcgm_note = "DCGM disabled by --no-dcgm. Showing NVML overall SM% (lumped CUDA+Tensor+RT)."
         else:
-            ok_cli, err_cli = DcgmProbe.cli_available()
-            if not ok_cli:
-                self.dcgm_note = f"DCGM unavailable: {err_cli}"
+            self.gpus = init_nvml()
+            if not self.gpus:
+                sys.exit("No NVIDIA GPUs detected by NVML")
+            self.sys_state = init_system()
+
+            with contextlib.suppress(pynvml.NVMLError):
+                raw = pynvml.nvmlSystemGetDriverVersion()
+                self._nv_driver = raw.decode() if isinstance(raw, bytes) else raw
+            with contextlib.suppress(pynvml.NVMLError):
+                v = pynvml.nvmlSystemGetCudaDriverVersion()
+                self._cuda_ver = f"{v // 1000}.{(v % 1000) // 10}"
+
+            if self.no_dcgm:
+                self.dcgm_note = "DCGM disabled by --no-dcgm. Showing NVML overall SM% (lumped CUDA+Tensor+RT)."
             else:
-                ok_prof, err_prof = DcgmProbe.profiling_supported()
-                if ok_prof:
-                    self.dcgm = DcgmProbe(len(self.gpus), interval_ms=int(self.interval * 1000))
-                    self.dcgm.start()
-                    self.have_profiling = True
+                ok_cli, err_cli = DcgmProbe.cli_available()
+                if not ok_cli:
+                    self.dcgm_note = f"DCGM unavailable: {err_cli}"
                 else:
-                    self.dcgm_note = f"DCGM present but profiling fields not available on this GPU. {err_prof}"
+                    ok_prof, err_prof = DcgmProbe.profiling_supported()
+                    if ok_prof:
+                        self.dcgm = DcgmProbe(len(self.gpus), interval_ms=int(self.interval * 1000))
+                        self.dcgm.start()
+                        self.have_profiling = True
+                    else:
+                        self.dcgm_note = f"DCGM present but profiling fields not available on this GPU. {err_prof}"
+
+        if not self.no_discover:
+            self.prom_endpoints = discover()
+            if self.prom_endpoints:
+                self.prom = PromScraper(self.prom_endpoints, self.store, interval_s=max(self.interval, 1.0))
+                self.prom.start()
+                found = ", ".join(f":{ep.port} ({ep.name}, {len(ep.metrics)} metrics)" for ep in self.prom_endpoints)
+                self._prom_note = f"Prometheus: scraping {found}"
+            else:
+                self._prom_note = ""
 
     def _gpu_series_table(self) -> dict[str, list[SeriesDef]]:
         """Return the per-GPU series table: DCGM's richer split, or NVML's lumped SM%."""
@@ -200,6 +215,28 @@ class DltopApp(App):
                 per_gpu(self._gpu_series_table()[tab], g.index),
                 classes=f"gpu-chart-{g.index}",
             )
+        if tab == "all" and self.prom_endpoints:
+            series = self._prom_series_defs()
+            plot = TimeSeriesPlot(
+                self.store,
+                series,
+                "Prometheus — % of peak ◍",
+                plot_id="all-prom-plot",
+                scale_to_peak=True,
+            )
+            yield Vertical(plot, SeriesToggles("all-prom-plot", series), classes="chart-block")
+
+    def _prom_series_defs(self) -> list[SeriesDef]:
+        """One default-off series per discovered metric; colours cycle the palette."""
+        palette = list(_PALETTE)
+        defs: list[SeriesDef] = []
+        n = 0
+        for ep in self.prom_endpoints:
+            for metric in ep.metrics:
+                label = f"◍ {metric[:28]} :{ep.port}"
+                defs.append((f"prom:{ep.port}:{metric}", palette[n % len(palette)], label, False))
+                n += 1
+        return defs
 
     # -- layout ----------------------------------------------------------------------
 
@@ -245,9 +282,10 @@ class DltopApp(App):
         procs.add_columns("GPU", "PID", "USER", "TYPE", "GPU-MEM", "%CPU", "HOST-MEM", "COMMAND")
         procs.cursor_type = "row"
 
-        if self.dcgm_note:
+        banner_text = "\n".join(note for note in (self.dcgm_note, self._prom_note) if note)
+        if banner_text:
             banner = self.query_one("#status-banner", Static)
-            banner.update(self.dcgm_note)
+            banner.update(banner_text)
             banner.remove_class("hidden")
             self.set_timer(TRANSIENT_NOTES_SECONDS, lambda: banner.add_class("hidden"))
 
@@ -455,7 +493,7 @@ class DltopApp(App):
             gpus=[GpuMeta(g.index, g.name, g.mem_total_mb / 1024.0) for g in self.gpus],
             driver=self._nv_driver or "?",
             cuda=self._cuda_ver or "?",
-            prom_endpoints=[],  # populated in Task 7
+            prom_endpoints=[f":{ep.port} ({ep.name}, {len(ep.metrics)} metrics)" for ep in self.prom_endpoints],
         )
 
     # -- bindings --------------------------------------------------------------------
@@ -476,6 +514,8 @@ class DltopApp(App):
     def on_unmount(self) -> None:  # noqa: D102
         if self.dcgm is not None:
             self.dcgm.stop()
+        if self.prom is not None:
+            self.prom.stop()
         if self.demo is None:
             with contextlib.suppress(pynvml.NVMLError):
                 pynvml.nvmlShutdown()

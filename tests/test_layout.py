@@ -18,7 +18,7 @@ def test_host_series_cover_requested_metrics() -> None:
 
 
 async def test_every_tab_stacks_host_then_per_gpu_charts() -> None:
-    app = DltopApp(interval=0.1, no_dcgm=True, demo_gpus=2)
+    app = DltopApp(interval=0.1, no_dcgm=True, demo_gpus=2, no_discover=True)
     async with app.run_test(size=(140, 50)) as pilot:
         await pilot.pause()
         for tab in ("all", "compute", "memory", "system"):
@@ -28,7 +28,7 @@ async def test_every_tab_stacks_host_then_per_gpu_charts() -> None:
 
 
 async def test_gpu_toggle_hides_that_gpus_charts_everywhere() -> None:
-    app = DltopApp(interval=0.1, no_dcgm=True, demo_gpus=2)
+    app = DltopApp(interval=0.1, no_dcgm=True, demo_gpus=2, no_discover=True)
     async with app.run_test(size=(140, 50)) as pilot:
         await pilot.pause()
         checkbox = app.query_one("#gpu-cb-1")
@@ -43,7 +43,7 @@ async def test_gpu_toggle_hides_that_gpus_charts_everywhere() -> None:
 
 
 async def test_single_gpu_shows_no_gpu_toggle_row() -> None:
-    app = DltopApp(interval=0.1, no_dcgm=True, demo_gpus=1)
+    app = DltopApp(interval=0.1, no_dcgm=True, demo_gpus=1, no_discover=True)
     async with app.run_test(size=(140, 50)) as pilot:
         await pilot.pause()
         assert not app.query("GpuToggles")
