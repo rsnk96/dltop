@@ -33,11 +33,18 @@ import re
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-# dltop.py lives at the repo root, one level up from this script.
+# the dltop package lives at the repo root, one level up from this script.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import dltop
+import dltop.app as app_module
+import dltop.sources.nvml as nvml_source
+from dltop.app import DltopApp
+from dltop.widgets.plot import TimeSeriesPlot
+
+if TYPE_CHECKING:
+    from dltop.models import GpuState
 
 TABS = ("tab-all", "tab-compute", "tab-memory", "tab-system")
 
@@ -75,7 +82,7 @@ def _demo_sample(t: float) -> dict[str, float]:
     }
 
 
-def _stage_cards(app: dltop.CvtopApp) -> None:
+def _stage_cards(app: DltopApp) -> None:
     """Pin the info-cards to a believable training snapshot, consistent with the graphs."""
     if app.gpus:
         g = app.gpus[0]
@@ -100,23 +107,24 @@ def _install_process_sanitiser() -> None:
     screenshot. Wraps dltop's process collector so the scrub also reaches the
     rendered table cells, not just the SVG text.
     """
-    original = dltop._collect_processes
+    original = nvml_source._collect_processes
     pattern = re.compile(r"(--dataset)(=|\s+)\S+")
 
-    def collect(gpus: list[dltop.GpuState]) -> list[dict]:
-        procs = original(gpus)
+    def collect(gpus: list[GpuState], proc_cache):  # noqa: ANN001, ANN202
+        procs = original(gpus, proc_cache)
         for proc in procs:
             if "molmo" in proc.get("cmd", ""):
                 proc["cmd"] = pattern.sub(r"\1", proc["cmd"])
         return procs
 
-    dltop._collect_processes = collect
+    nvml_source._collect_processes = collect
+    app_module._collect_processes = collect
 
 
 async def _capture(warmup: float, size: tuple[int, int], interval: float) -> dict[str, str]:
     """Drive the app for ``warmup`` seconds of demo data, return ``{tab_name: svg}``."""
     plot_ids = ("all-plot", "compute-plot", "memory-plot", "system-plot")
-    app = dltop.CvtopApp(interval=interval, no_dcgm=False)
+    app = DltopApp(interval=interval, no_dcgm=False)
     svgs: dict[str, str] = {}
     async with app.run_test(size=size) as pilot:
         await pilot.pause()
@@ -128,7 +136,7 @@ async def _capture(warmup: float, size: tuple[int, int], interval: float) -> dic
         # Warm-up: feed cyclical samples in real time so the graph fills with
         # ~`warmup` seconds of history before we record.
         start = time.monotonic()
-        plots = [app.query_one(f"#{pid}", dltop.TimeSeriesPlot) for pid in plot_ids]
+        plots = [app.query_one(f"#{pid}", TimeSeriesPlot) for pid in plot_ids]
         while time.monotonic() - start < warmup:
             sample = _demo_sample(time.monotonic() - start)
             for plot in plots:

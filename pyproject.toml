@@ -38,8 +38,8 @@ screenshots = ["cairosvg>=2.7"]
 [project.scripts]
 dltop = "dltop:main"
 
-[tool.setuptools]
-py-modules = ["dltop"]
+[tool.setuptools.packages.find]
+include = ["dltop*"]
 
 [tool.black]
 line-length = 119

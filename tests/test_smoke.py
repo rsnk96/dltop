@@ -56,13 +56,13 @@ def test_readme_exists_and_is_non_trivial() -> None:
 
 def test_public_constants_are_plausible() -> None:
     """Sanity-check DCGM field constants -- catches accidental list/dict drift."""
-    import dltop
+    from dltop.sources.dcgm import DCGM_FIELD_NAMES, DCGM_FIELD_ORDER
 
-    assert len(dltop.DCGM_FIELD_ORDER) == len(dltop.DCGM_FIELD_NAMES)
-    assert set(dltop.DCGM_FIELD_ORDER) == set(dltop.DCGM_FIELD_NAMES.keys())
+    assert len(DCGM_FIELD_ORDER) == len(DCGM_FIELD_NAMES)
+    assert set(DCGM_FIELD_ORDER) == set(DCGM_FIELD_NAMES.keys())
     # Names referenced elsewhere in the rendering code -- keep them stable.
     expected_names = {"sm_active", "tensor_active", "fp32_active", "fp16_active", "fp64_active"}
-    assert set(dltop.DCGM_FIELD_NAMES.values()) == expected_names
+    assert set(DCGM_FIELD_NAMES.values()) == expected_names
 
 
 def test_all_tab_combines_every_series_with_four_active() -> None:
@@ -74,14 +74,15 @@ def test_all_tab_combines_every_series_with_four_active() -> None:
     all 18 lines on. This pins the contract: every series present exactly once, and
     only CPU / RAM / GPU SM / GPU VRAM visible by default.
     """
-    import dltop
+    from dltop.app import DltopApp
+    from dltop.models import COMPUTE_SERIES_DCGM, MEMORY_SERIES, SYSTEM_SERIES
 
-    app = dltop.CvtopApp(interval=0.5, no_dcgm=True)
-    app._compute_series = dltop.COMPUTE_SERIES_DCGM  # set by _prepare_sources() at compose time
+    app = DltopApp(interval=0.5, no_dcgm=True)
+    app._compute_series = COMPUTE_SERIES_DCGM  # set by _prepare_sources() at compose time
     series = app._all_series()
     names = [name for name, _, _, _ in series]
 
-    expected = {name for name, _, _, _ in (*dltop.COMPUTE_SERIES_DCGM, *dltop.MEMORY_SERIES, *dltop.SYSTEM_SERIES)}
+    expected = {name for name, _, _, _ in (*COMPUTE_SERIES_DCGM, *MEMORY_SERIES, *SYSTEM_SERIES)}
     assert set(names) == expected, "All tab must contain every renderable series"
     assert len(names) == len(set(names)), "no series may appear twice"
     on_by_default = {name for name, _, _, default in series if default}
@@ -92,13 +93,13 @@ def test_clamp_pct_handles_nan_and_range() -> None:
     """Regression guard for the NaN check -- PLR0124 rewrite used math.isnan."""
     import math
 
-    import dltop
+    from dltop.models import _clamp_pct
 
-    assert dltop._clamp_pct(float("nan")) == 0.0
-    assert dltop._clamp_pct(-5.0) == 0.0
-    assert dltop._clamp_pct(150.0) == 100.0
-    assert dltop._clamp_pct(42.0) == 42.0
-    assert not math.isnan(dltop._clamp_pct(float("nan")))
+    assert _clamp_pct(float("nan")) == 0.0
+    assert _clamp_pct(-5.0) == 0.0
+    assert _clamp_pct(150.0) == 100.0
+    assert _clamp_pct(42.0) == 42.0
+    assert not math.isnan(_clamp_pct(float("nan")))
 
 
 def test_timeseries_plot_renders_before_first_push() -> None:
@@ -112,9 +113,10 @@ def test_timeseries_plot_renders_before_first_push() -> None:
     """
     from rich.text import Text
 
-    import dltop
+    from dltop.models import COMPUTE_SERIES_DCGM
+    from dltop.widgets.plot import TimeSeriesPlot
 
-    plot = dltop.TimeSeriesPlot(dltop.COMPUTE_SERIES_DCGM, "test", "compute-plot")
+    plot = TimeSeriesPlot(COMPUTE_SERIES_DCGM, "test", "compute-plot")
     # Pure rasterisation must not raise with empty ring buffers...
     glyphs, owners = plot._rasterize(plot._visible_series(), 40, 40)
     assert isinstance(glyphs, dict)
@@ -133,9 +135,10 @@ def test_render_never_crashes_the_tui() -> None:
     """
     from rich.text import Text
 
-    import dltop
+    from dltop.models import COMPUTE_SERIES_DCGM
+    from dltop.widgets.plot import TimeSeriesPlot
 
-    plot = dltop.TimeSeriesPlot(dltop.COMPUTE_SERIES_DCGM, "boom", "compute-plot")
+    plot = TimeSeriesPlot(COMPUTE_SERIES_DCGM, "boom", "compute-plot")
 
     def explode() -> object:
         msg = "simulated draw failure"
@@ -160,10 +163,11 @@ def test_overlapping_series_are_never_hidden() -> None:
     """
     import time
 
-    import dltop
+    from dltop.models import COMPUTE_SERIES_NVML
+    from dltop.widgets.plot import TimeSeriesPlot
 
-    plot = dltop.TimeSeriesPlot(dltop.COMPUTE_SERIES_NVML, "test", "compute-plot")
-    names = [s[0] for s in dltop.COMPUTE_SERIES_NVML]
+    plot = TimeSeriesPlot(COMPUTE_SERIES_NVML, "test", "compute-plot")
+    names = [s[0] for s in COMPUTE_SERIES_NVML]
     now = time.time()
     # First two series share the exact same value; the rest sit at 0%.
     values = {names[0]: 50.0, names[1]: 50.0, names[2]: 0.0, names[3]: 0.0}
