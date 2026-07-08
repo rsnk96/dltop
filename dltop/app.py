@@ -11,20 +11,18 @@ from typing import TYPE_CHECKING
 from textual.app import App
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.widgets import DataTable, Footer, Header, Static, TabbedContent, TabPane
 
 from dltop.metrics import MetricStore
 from dltop.models import (
-    ALL_ACTIVE_BY_DEFAULT,
-    ALL_RECOLOUR,
-    COMPUTE_SERIES_DCGM,
-    COMPUTE_SERIES_NVML,
-    MEMORY_SERIES,
-    SYSTEM_SERIES,
-    SeriesDef,
+    GPU_SERIES_DCGM,
+    GPU_SERIES_NVML,
+    HOST_SERIES,
     SystemState,
     _fmt_bandwidth,
     _pct_color,
+    per_gpu,
 )
 from dltop.sources.dcgm import DcgmProbe
 from dltop.sources.demo import DemoSource
@@ -32,13 +30,13 @@ from dltop.sources.nvml import _collect_processes, init_nvml, pynvml, sample_nvm
 from dltop.sources.system import init_system, psutil, sample_system
 from dltop.widgets.cards import InfoCard
 from dltop.widgets.plot import TimeSeriesPlot
-from dltop.widgets.toggles import SeriesToggles
+from dltop.widgets.toggles import GpuToggles, SeriesToggles
 
 if TYPE_CHECKING:
     from psutil import Process as PsutilProcess
     from textual.app import ComposeResult
 
-    from dltop.models import GpuState
+    from dltop.models import GpuState, SeriesDef
 
 TRANSIENT_NOTES_SECONDS = 8.0
 
@@ -76,6 +74,13 @@ class DltopApp(App):
     TabbedContent {
         height: 1fr;
         min-height: 18;
+    }
+    .chart-block {
+        height: auto;
+    }
+    .chart-block TimeSeriesPlot {
+        height: 16;
+        min-height: 10;
     }
     #procs {
         height: auto;
@@ -123,7 +128,6 @@ class DltopApp(App):
         self.have_profiling = False
         self.dcgm_note = ""
         self.paused = False
-        self._compute_series: list[SeriesDef] = []
         self._nv_driver = ""
         self._cuda_ver = ""
         self._proc_cache: dict[int, PsutilProcess] = {}
@@ -136,7 +140,6 @@ class DltopApp(App):
             self.sys_state = SystemState()
             self.have_profiling = True  # demo fabricates the full DCGM series
             self._nv_driver, self._cuda_ver = "demo", "demo"
-            self._compute_series = COMPUTE_SERIES_DCGM
             return
         self.gpus = init_nvml()
         if not self.gpus:
@@ -164,22 +167,30 @@ class DltopApp(App):
                     self.have_profiling = True
                 else:
                     self.dcgm_note = f"DCGM present but profiling fields not available on this GPU. {err_prof}"
-        self._compute_series = COMPUTE_SERIES_DCGM if self.have_profiling else COMPUTE_SERIES_NVML
 
-    def _all_series(self) -> list[SeriesDef]:
-        """Every renderable series on one chart, only the four headline metrics on.
+    def _gpu_series_table(self) -> dict[str, list[SeriesDef]]:
+        """Return the per-GPU series table: DCGM's richer split, or NVML's lumped SM%."""
+        return GPU_SERIES_DCGM if self.have_profiling else GPU_SERIES_NVML
 
-        Concatenates the Compute (DCGM or NVML), Memory and System series. Names are
-        unique across tabs, so the combined chart's ring buffers never collide.
-        """
-        combined: list[SeriesDef] = []
-        seen: set[str] = set()
-        for name, colour, label, _ in (*self._compute_series, *MEMORY_SERIES, *SYSTEM_SERIES):
-            if name in seen:
-                continue
-            seen.add(name)
-            combined.append((name, ALL_RECOLOUR.get(name, colour), label, name in ALL_ACTIVE_BY_DEFAULT))
-        return combined
+    def _chart_block(self, plot_id: str, title: str, series: list[SeriesDef], *, classes: str = "") -> Vertical:
+        """Wrap one chart + its series toggles in a fixed-height ``Vertical`` block."""
+        return Vertical(
+            TimeSeriesPlot(self.store, series, title, plot_id=plot_id),
+            SeriesToggles(plot_id, series),
+            classes=f"chart-block {classes}".strip(),
+        )
+
+    def _compose_tab(self, tab: str) -> ComposeResult:
+        """Yield the host chart followed by one chart per GPU, all for domain ``tab``."""
+        host_title = "Host — CPU · RAM · Disk · Network" if tab == "all" else f"Host — {tab}"
+        yield self._chart_block(f"{tab}-host-plot", host_title, HOST_SERIES[tab])
+        for g in self.gpus:
+            yield self._chart_block(
+                f"{tab}-gpu{g.index}-plot",
+                f"GPU {g.index} · {g.name}",
+                per_gpu(self._gpu_series_table()[tab], g.index),
+                classes=f"gpu-chart-{g.index}",
+            )
 
     # -- layout ----------------------------------------------------------------------
 
@@ -198,29 +209,12 @@ class DltopApp(App):
                 yield InfoCard(" PCIe ", card_id=f"pcie-card-{g.index}")
             yield InfoCard(" System ", card_id="sys-card")
 
-        all_series = self._all_series()
+        if len(self.gpus) > 1:
+            yield GpuToggles(self.gpus)
         with TabbedContent(id="tabs"):
-            with TabPane("All", id="tab-all"), Vertical():
-                yield TimeSeriesPlot(self.store, all_series, "All metrics", plot_id="all-plot")
-                yield SeriesToggles("all-plot", all_series)
-            with TabPane("Compute", id="tab-compute"), Vertical():
-                yield TimeSeriesPlot(
-                    self.store,
-                    self._compute_series,
-                    "Compute: CPU, GPU SM, encode/decode",
-                    plot_id="compute-plot",
-                )
-                yield SeriesToggles("compute-plot", self._compute_series)
-            with TabPane("Memory", id="tab-memory"), Vertical():
-                yield TimeSeriesPlot(
-                    self.store, MEMORY_SERIES, "Memory: RAM, GPU VRAM, VRAM bandwidth", plot_id="memory-plot"
-                )
-                yield SeriesToggles("memory-plot", MEMORY_SERIES)
-            with TabPane("System", id="tab-system"), Vertical():
-                yield TimeSeriesPlot(
-                    self.store, SYSTEM_SERIES, "System: PCIe, GPU power, disk, network", plot_id="system-plot"
-                )
-                yield SeriesToggles("system-plot", SYSTEM_SERIES)
+            for tab, title in (("all", "All"), ("compute", "Compute"), ("memory", "Memory"), ("system", "System")):
+                with TabPane(title, id=f"tab-{tab}"), VerticalScroll():
+                    yield from self._compose_tab(tab)
 
         yield VerticalScroll(DataTable(id="procs", zebra_stripes=True))
 
@@ -267,58 +261,50 @@ class DltopApp(App):
                     g.dcgm = self.dcgm.snapshot(g.index)
             sample_system(self.sys_state)
         self._push_series()
-        self._refresh_cards()
-        self._refresh_procs()
+        # A `set_interval` timer callback can still be in flight when the app starts
+        # tearing down (e.g. a test's `run_test()` context exiting) -- widgets may
+        # already be unmounted by the time this runs. That's not a real bug, so
+        # swallow it the same way TimeSeriesPlot.render() never lets a draw glitch
+        # kill the whole monitor.
+        try:
+            self._refresh_cards()
+            self._refresh_procs()
+        except NoMatches:
+            return
 
     def _push_series(self) -> None:
-        now = time.time()
-        # Across multiple GPUs we aggregate by max so a hot GPU isn't smoothed away.
+        """Record one sample per series: plain names for host, ``name@{i}`` per GPU.
 
-        # -- Compute: host CPU + GPU compute engines + media encode/decode --------------
-        compute: dict[str, float] = {
+        Values are raw (unclamped) -- the plot clamps its own y-axis visually, but
+        the Table tab (Task 6) needs the true numbers, e.g. actual MB/s not a
+        percent-axis-friendly cap.
+        """
+        samples: dict[str, float] = {
             "cpu": self.sys_state.cpu_pct,
-            "nvenc": max((g.nvenc_pct for g in self.gpus), default=0.0),
-            "nvdec": max((g.nvdec_pct for g in self.gpus), default=0.0),
-        }
-        if self.have_profiling:
-            compute["sm"] = max((g.dcgm.get("sm_active", 0.0) for g in self.gpus), default=0.0)
-            compute["tensor"] = max((g.dcgm.get("tensor_active", 0.0) for g in self.gpus), default=0.0)
-            compute["fp32"] = max((g.dcgm.get("fp32_active", 0.0) for g in self.gpus), default=0.0)
-            compute["fp16"] = max((g.dcgm.get("fp16_active", 0.0) for g in self.gpus), default=0.0)
-            compute["fp64"] = max((g.dcgm.get("fp64_active", 0.0) for g in self.gpus), default=0.0)
-        else:
-            compute["sm"] = max((g.sm_overall_pct for g in self.gpus), default=0.0)
-
-        # -- Memory: host RAM + GPU VRAM + GPU VRAM bandwidth ---------------------------
-        memory = {
             "ram": self.sys_state.ram_pct,
-            "vram": max((g.mem_pct for g in self.gpus), default=0.0),
-            "mbw": max((g.mbw_pct for g in self.gpus), default=0.0),
+            "disk_r": self.sys_state.disk_read_mbs,
+            "disk_w": self.sys_state.disk_write_mbs,
+            "net_rx": self.sys_state.net_rx_mbs,
+            "net_tx": self.sys_state.net_tx_mbs,
         }
-
-        # -- System: PCIe + GPU power + disk + network ----------------------------------
-        agg_tx = sum(g.pcie_tx_mbs for g in self.gpus)
-        agg_rx = sum(g.pcie_rx_mbs for g in self.gpus)
-        max_peak = max((g.pcie_max_mbs for g in self.gpus), default=0.0)
-        pcie_tx_pct = (agg_tx / max_peak * 100.0) if max_peak else 0.0
-        pcie_rx_pct = (agg_rx / max_peak * 100.0) if max_peak else 0.0
-        system = {
-            "pcie_tx": pcie_tx_pct,
-            "pcie_rx": pcie_rx_pct,
-            "power": max(
-                ((g.power_w / g.power_limit_w * 100.0) if g.power_limit_w else 0.0 for g in self.gpus),
-                default=0.0,
-            ),
-            # Disk/Net are MB/s so clamp to a generous cap for the shared 0-100 axis.
-            "disk_r": min(100.0, self.sys_state.disk_read_mbs),
-            "disk_w": min(100.0, self.sys_state.disk_write_mbs),
-            "net_rx": min(100.0, self.sys_state.net_rx_mbs),
-            "net_tx": min(100.0, self.sys_state.net_tx_mbs),
-        }
-
-        self.store.record_many({**compute, **memory, **system}, ts=now)
-        # The "All" tab reads the same names from the same store, so it needs no
-        # separate feed -- every plot just re-reads whatever names it cares about.
+        for g in self.gpus:
+            i = g.index
+            samples[f"nvenc@{i}"] = g.nvenc_pct
+            samples[f"nvdec@{i}"] = g.nvdec_pct
+            samples[f"vram@{i}"] = g.mem_pct
+            samples[f"mbw@{i}"] = g.mbw_pct
+            samples[f"power@{i}"] = (g.power_w / g.power_limit_w * 100.0) if g.power_limit_w else 0.0
+            samples[f"pcie_tx@{i}"] = (g.pcie_tx_mbs / g.pcie_max_mbs * 100.0) if g.pcie_max_mbs else 0.0
+            samples[f"pcie_rx@{i}"] = (g.pcie_rx_mbs / g.pcie_max_mbs * 100.0) if g.pcie_max_mbs else 0.0
+            if self.have_profiling:
+                samples[f"sm@{i}"] = g.dcgm.get("sm_active", 0.0)
+                samples[f"tensor@{i}"] = g.dcgm.get("tensor_active", 0.0)
+                samples[f"fp32@{i}"] = g.dcgm.get("fp32_active", 0.0)
+                samples[f"fp16@{i}"] = g.dcgm.get("fp16_active", 0.0)
+                samples[f"fp64@{i}"] = g.dcgm.get("fp64_active", 0.0)
+            else:
+                samples[f"sm@{i}"] = g.sm_overall_pct
+        self.store.record_many(samples, ts=time.time())
         for plot in self.query(TimeSeriesPlot):
             plot.replot()
 

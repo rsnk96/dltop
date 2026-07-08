@@ -5,13 +5,29 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Checkbox
+from textual.widgets import Checkbox, Static
 
-from dltop.models import SeriesDef, _swatch_hex
+from dltop.models import GpuState, SeriesDef, _swatch_hex
 from dltop.widgets.plot import TimeSeriesPlot
 
 if TYPE_CHECKING:
     from textual.app import ComposeResult
+
+
+def _id_safe(name: str) -> str:
+    """Encode a series name for use inside a Textual widget id.
+
+    Textual ids may only contain letters, numbers, underscores and hyphens, but
+    per-GPU series names look like ``sm@1`` -- ``@`` is illegal there. None of the
+    base series names contain a hyphen, so substituting one in is unambiguous to
+    reverse with :func:`_from_id_safe`.
+    """
+    return name.replace("@", "-at-")
+
+
+def _from_id_safe(safe: str) -> str:
+    """Invert :func:`_id_safe`."""
+    return safe.replace("-at-", "@")
 
 
 class SeriesToggles(Vertical):
@@ -59,15 +75,44 @@ class SeriesToggles(Vertical):
                     yield Checkbox(
                         f"[{_swatch_hex(color_idx)}]●[/] {label}",
                         value=default,
-                        id=f"{self._plot_id}-cb-{name}",
+                        id=f"{self._plot_id}-cb-{_id_safe(name)}",
                     )
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
-        """Forward the flip to the sibling plot. id format: '<plot_id>-cb-<name>'."""
+        """Forward the flip to the sibling plot. id format: '<plot_id>-cb-<id-safe-name>'."""
         cb_id = event.checkbox.id or ""
         prefix = f"{self._plot_id}-cb-"
         if not cb_id.startswith(prefix):
             return
-        name = cb_id[len(prefix) :]
+        name = _from_id_safe(cb_id[len(prefix) :])
         plot = self.app.query_one(f"#{self._plot_id}", TimeSeriesPlot)
         plot.set_visible(name, visible=event.value)
+
+
+class GpuToggles(Horizontal):
+    """One checkbox per GPU; unchecking hides that GPU's charts on every tab."""
+
+    DEFAULT_CSS = """
+    GpuToggles { height: auto; padding: 0 1; background: $surface; }
+    GpuToggles Checkbox { margin: 0 2 0 0; width: auto; height: 1; border: none; background: transparent; }
+    GpuToggles Static { width: auto; padding: 0 1 0 0; color: $accent; text-style: bold; }
+    """
+
+    def __init__(self, gpus: list[GpuState]) -> None:
+        """Build the row for ``gpus`` (only composed when there is more than one)."""
+        super().__init__()
+        self._gpus = gpus
+
+    def compose(self) -> ComposeResult:  # noqa: D102
+        yield Static("GPUs:")
+        for g in self._gpus:
+            yield Checkbox(f"GPU {g.index} · {g.name}", value=True, id=f"gpu-cb-{g.index}")
+
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        """Show/hide every chart block belonging to the toggled GPU."""
+        cb_id = event.checkbox.id or ""
+        if not cb_id.startswith("gpu-cb-"):
+            return
+        idx = cb_id.removeprefix("gpu-cb-")
+        for block in self.app.query(f".gpu-chart-{idx}"):
+            block.display = event.value

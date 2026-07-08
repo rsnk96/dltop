@@ -77,28 +77,20 @@ def test_public_constants_are_plausible() -> None:
     assert set(DCGM_FIELD_NAMES.values()) == expected_names
 
 
-def test_all_tab_combines_every_series_with_four_active() -> None:
-    """The default 'All' tab overlays every renderable series but enables only four.
+def test_all_tab_series_tables_are_all_active_by_default() -> None:
+    """The domain-grouped 'All' tab shows a Host chart + one chart per GPU.
 
-    WHY: 'All' is the first/default screen. If a future edit broke the concatenation
-    of the three tabs (dropping or duplicating a series) or changed the active set,
-    the user's very first view would silently lose a metric or open cluttered with
-    all 18 lines on. This pins the contract: every series present exactly once, and
-    only CPU / RAM / GPU SM / GPU VRAM visible by default.
+    WHY: Task 5 replaced the single overlaid "All" chart with one-domain-per-chart
+    stacks (host never mixes with a GPU's series). This pins the new contract: the
+    "all" key in both HOST_SERIES and the GPU series tables covers every metric in
+    that domain, and every series defaults to visible (each chart is scoped enough
+    that clutter is no longer a concern).
     """
-    from dltop.app import DltopApp
-    from dltop.models import COMPUTE_SERIES_DCGM, MEMORY_SERIES, SYSTEM_SERIES
+    from dltop.models import GPU_SERIES_DCGM, GPU_SERIES_NVML, HOST_SERIES
 
-    app = DltopApp(interval=0.5, no_dcgm=True)
-    app._compute_series = COMPUTE_SERIES_DCGM  # set by _prepare_sources() at compose time
-    series = app._all_series()
-    names = [name for name, _, _, _ in series]
-
-    expected = {name for name, _, _, _ in (*COMPUTE_SERIES_DCGM, *MEMORY_SERIES, *SYSTEM_SERIES)}
-    assert set(names) == expected, "All tab must contain every renderable series"
-    assert len(names) == len(set(names)), "no series may appear twice"
-    on_by_default = {name for name, _, _, default in series if default}
-    assert on_by_default == {"cpu", "ram", "sm", "vram"}
+    for table in (HOST_SERIES, GPU_SERIES_DCGM, GPU_SERIES_NVML):
+        for name, _, _, default in table["all"]:
+            assert default, f"{name!r} should default to visible"
 
 
 def test_clamp_pct_handles_nan_and_range() -> None:
@@ -126,10 +118,10 @@ def test_timeseries_plot_renders_before_first_push() -> None:
     from rich.text import Text
 
     from dltop.metrics import MetricStore
-    from dltop.models import COMPUTE_SERIES_DCGM
+    from dltop.models import GPU_SERIES_DCGM
     from dltop.widgets.plot import TimeSeriesPlot
 
-    plot = TimeSeriesPlot(MetricStore(), COMPUTE_SERIES_DCGM, "test", "compute-plot")
+    plot = TimeSeriesPlot(MetricStore(), GPU_SERIES_DCGM["compute"], "test", "compute-plot")
     # Pure rasterisation must not raise with empty ring buffers...
     glyphs, owners = plot._rasterize(plot._visible_series(), 40, 40)
     assert isinstance(glyphs, dict)
@@ -149,10 +141,10 @@ def test_render_never_crashes_the_tui() -> None:
     from rich.text import Text
 
     from dltop.metrics import MetricStore
-    from dltop.models import COMPUTE_SERIES_DCGM
+    from dltop.models import GPU_SERIES_DCGM
     from dltop.widgets.plot import TimeSeriesPlot
 
-    plot = TimeSeriesPlot(MetricStore(), COMPUTE_SERIES_DCGM, "boom", "compute-plot")
+    plot = TimeSeriesPlot(MetricStore(), GPU_SERIES_DCGM["compute"], "boom", "compute-plot")
 
     def explode() -> object:
         msg = "simulated draw failure"
@@ -178,12 +170,13 @@ def test_overlapping_series_are_never_hidden() -> None:
     import time
 
     from dltop.metrics import MetricStore
-    from dltop.models import COMPUTE_SERIES_NVML
+    from dltop.models import GPU_SERIES_DCGM
     from dltop.widgets.plot import TimeSeriesPlot
 
     store = MetricStore()
-    plot = TimeSeriesPlot(store, COMPUTE_SERIES_NVML, "test", "compute-plot")
-    names = [s[0] for s in COMPUTE_SERIES_NVML]
+    series = GPU_SERIES_DCGM["compute"]
+    plot = TimeSeriesPlot(store, series, "test", "compute-plot")
+    names = [s[0] for s in series]
     now = time.time()
     # First two series share the exact same value; the rest sit at 0%.
     values = {names[0]: 50.0, names[1]: 50.0, names[2]: 0.0, names[3]: 0.0}

@@ -53,16 +53,25 @@ def _swatch_hex(idx: int) -> str:
 # Each entry is (name, ansi256_index, label, default_visible). Indices come from
 # `_PALETTE` above and are picked for max in-tab separation on a 256-color terminal.
 #
-# Three tabs, grouped by what an operator reasons about together:
-#   * Compute — host + GPU compute engines + media encode/decode
-#   * Memory  — host RAM, GPU VRAM, GPU VRAM bandwidth
-#   * System  — PCIe, GPU power, disk, network
+# Design rule (non-negotiable): host metrics (CPU/RAM/Disk/Net) are NEVER mixed
+# into a GPU's chart. Each chart shows exactly one domain: host, or a single GPU.
+# Within each domain, four tabs group what an operator reasons about together:
+#   * Compute — compute engines + media encode/decode (GPU) / CPU (host)
+#   * Memory  — RAM (host) / VRAM + VRAM bandwidth (GPU)
+#   * System  — disk + network (host) / PCIe + power (GPU)
 SeriesDef = tuple[str, int, str, bool]
 
+_HOST_ALL: list[SeriesDef] = [
+    ("cpu", 208, "CPU", True),  # orange
+    ("ram", 46, "RAM", True),  # green
+    ("disk_r", 226, "Disk R (MB/s)", True),  # yellow
+    ("disk_w", 220, "Disk W (MB/s)", True),  # gold
+    ("net_rx", 201, "Net RX (MB/s)", True),  # magenta
+    ("net_tx", 93, "Net TX (MB/s)", True),  # purple
+]
 # Compute tab. The DCGM variant adds the Tensor/FP32/FP16/FP64 split that only
 # data-center GPUs expose; the NVML variant lumps it all into a single SM%.
-COMPUTE_SERIES_DCGM: list[SeriesDef] = [
-    ("cpu", 208, "CPU", True),  # orange
+_GPU_COMPUTE_DCGM: list[SeriesDef] = [
     ("sm", 15, "GPU SM", True),  # white  — overall
     ("tensor", 201, "Tensor", True),  # magenta / hot pink
     ("fp32", 39, "FP32", True),  # deep sky blue
@@ -71,33 +80,76 @@ COMPUTE_SERIES_DCGM: list[SeriesDef] = [
     ("nvenc", 220, "NVENC", True),  # gold
     ("nvdec", 93, "NVDEC", True),  # purple
 ]
-COMPUTE_SERIES_NVML: list[SeriesDef] = [
-    ("cpu", 208, "CPU", True),  # orange
+_GPU_COMPUTE_NVML: list[SeriesDef] = [
     ("sm", 15, "GPU SM", True),  # white
     ("nvenc", 220, "NVENC", True),  # gold
     ("nvdec", 93, "NVDEC", True),  # purple
 ]
-MEMORY_SERIES: list[SeriesDef] = [
-    ("ram", 208, "RAM", True),  # orange
-    ("vram", 51, "GPU VRAM", True),  # cyan
-    ("mbw", 46, "GPU VRAM BW", True),  # green
+_GPU_MEMORY: list[SeriesDef] = [
+    ("vram", 51, "VRAM", True),  # cyan
+    ("mbw", 46, "VRAM BW", True),  # green
 ]
-SYSTEM_SERIES: list[SeriesDef] = [
+_GPU_SYSTEM: list[SeriesDef] = [
     ("pcie_tx", 51, "PCIe ↑", True),  # cyan
     ("pcie_rx", 15, "PCIe ↓", True),  # white
-    ("power", 196, "GPU Power %", True),  # red
-    ("disk_r", 46, "Disk Read (MB/s)", True),  # green
-    ("disk_w", 226, "Disk Write (MB/s)", True),  # yellow
-    ("net_rx", 201, "Net RX (MB/s)", True),  # magenta
-    ("net_tx", 208, "Net TX (MB/s)", True),  # orange
+    ("power", 196, "Power %", True),  # red
 ]
 
-# The "All" tab overlays every renderable series on one chart but starts with only
-# the four headline metrics enabled — the at-a-glance "is anything busy?" view.
-ALL_ACTIVE_BY_DEFAULT = ("cpu", "ram", "sm", "vram")
-# RAM is orange in the Memory tab (same as CPU); recolour it on the combined chart
-# so the two default-on host metrics stay distinct from each other.
-ALL_RECOLOUR = {"ram": 46}  # green
+HOST_SERIES: dict[str, list[SeriesDef]] = {
+    "all": _HOST_ALL,
+    "compute": [("cpu", 208, "CPU", True)],
+    "memory": [("ram", 208, "RAM", True)],
+    "system": _HOST_ALL[2:],  # disk + network
+}
+GPU_SERIES_DCGM: dict[str, list[SeriesDef]] = {
+    "all": [*_GPU_COMPUTE_DCGM, *_GPU_MEMORY, *_GPU_SYSTEM],
+    "compute": _GPU_COMPUTE_DCGM,
+    "memory": _GPU_MEMORY,
+    "system": _GPU_SYSTEM,
+}
+GPU_SERIES_NVML: dict[str, list[SeriesDef]] = {
+    "all": [*_GPU_COMPUTE_NVML, *_GPU_MEMORY, *_GPU_SYSTEM],
+    "compute": _GPU_COMPUTE_NVML,
+    "memory": _GPU_MEMORY,
+    "system": _GPU_SYSTEM,
+}
+
+# Table-tab metadata (Task 6): units and labels by base series name.
+SERIES_UNITS: dict[str, str] = {
+    "cpu": "%",
+    "ram": "%",
+    "disk_r": "MB/s",
+    "disk_w": "MB/s",
+    "net_rx": "MB/s",
+    "net_tx": "MB/s",
+    "sm": "%",
+    "tensor": "%",
+    "fp32": "%",
+    "fp16": "%",
+    "fp64": "%",
+    "nvenc": "%",
+    "nvdec": "%",
+    "vram": "%",
+    "mbw": "%",
+    "pcie_tx": "%",
+    "pcie_rx": "%",
+    "power": "%",
+}
+SERIES_LABELS: dict[str, str] = {
+    name: label for defs in (_HOST_ALL, _GPU_COMPUTE_DCGM, _GPU_MEMORY, _GPU_SYSTEM) for name, _, label, _ in defs
+}
+
+
+def per_gpu(defs: list[SeriesDef], gpu_index: int) -> list[SeriesDef]:
+    """Suffix every series name with ``@{gpu_index}`` for per-GPU identity."""
+    return [(f"{name}@{gpu_index}", colour, label, default) for name, colour, label, default in defs]
+
+
+def split_series_name(name: str) -> tuple[str, int | None]:
+    """Split ``sm@1`` into ``("sm", 1)``; plain host names return ``(name, None)``."""
+    base, sep, idx = name.partition("@")
+    return (base, int(idx)) if sep else (base, None)
+
 
 # --------------------------------------------------------------------------------------
 # Data model (framework-agnostic)
