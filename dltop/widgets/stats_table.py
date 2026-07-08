@@ -55,8 +55,10 @@ class StatsTable(Vertical):
 
     def _band_text(self) -> str:
         """Return a merged-cell band aligned over the four stat columns."""
-        # Each DataTable column renders one cell-padding space either side.
-        offset = (_W_METRIC + 2) + (_W_SOURCE + 2) + 1
+        # Each DataTable column renders one cell-padding space either side, so a
+        # width-w column occupies w+2 cells. The Metric and Source columns thus
+        # end at (w+2) each, and the Now column starts exactly there.
+        offset = (_W_METRIC + 2) + (_W_SOURCE + 2)
         span = 4 * (_W_STAT + 2) - 2
         label = f" stats over last {self._window_s:.0f} s (--window) "
         return " " * offset + f"┌{label:─^{span}}┐"

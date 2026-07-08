@@ -30,6 +30,25 @@ async def test_table_tab_lists_host_and_per_gpu_rows() -> None:
         assert "60 s" in band
 
 
+async def test_window_band_aligns_with_stat_columns() -> None:
+    """The band's left corner must sit exactly where the 'Now' column starts."""
+    app = await _demo_app_with_data()
+    async with app.run_test(size=(140, 50)) as pilot:
+        await pilot.pause()
+        app.query_one("#tabs").active = "tab-table"
+        await pilot.pause()
+        table = app.query_one("#stats-table")
+        # Compute where the first stat column ("Now") actually begins, summing the
+        # rendered width (content + cell padding) of the columns before it.
+        now_offset = 0
+        for column in table.columns.values():
+            if str(column.label) == "Now":
+                break
+            now_offset += column.get_render_width(table)
+        band = app.query_one(StatsTable)._band_text()
+        assert band.index("┌") == now_offset
+
+
 async def test_copy_buttons_export_each_format(monkeypatch: pytest.MonkeyPatch) -> None:
     app = await _demo_app_with_data()
     copied: list[str] = []
