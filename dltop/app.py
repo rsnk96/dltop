@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import contextlib
 import math
+import platform
+import socket
 import sys
 import time
 from typing import TYPE_CHECKING
@@ -15,15 +17,20 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.widgets import DataTable, Footer, Header, Static, TabbedContent, TabPane
 
+from dltop._version import __version__
+from dltop.export import CaptureMeta, GpuMeta, StatRow, host_cpu_desc
 from dltop.metrics import MetricStore
 from dltop.models import (
     GPU_SERIES_DCGM,
     GPU_SERIES_NVML,
     HOST_SERIES,
+    SERIES_LABELS,
+    SERIES_UNITS,
     SystemState,
     _fmt_bandwidth,
     _pct_color,
     per_gpu,
+    split_series_name,
 )
 from dltop.sources.dcgm import DcgmProbe
 from dltop.sources.demo import DemoSource
@@ -31,6 +38,7 @@ from dltop.sources.nvml import _collect_processes, init_nvml, pynvml, sample_nvm
 from dltop.sources.system import init_system, psutil, sample_system
 from dltop.widgets.cards import InfoCard
 from dltop.widgets.plot import TimeSeriesPlot
+from dltop.widgets.stats_table import StatsTable
 from dltop.widgets.toggles import GpuToggles, SeriesToggles
 
 if TYPE_CHECKING:
@@ -216,6 +224,8 @@ class DltopApp(App):
             for tab, title in (("all", "All"), ("compute", "Compute"), ("memory", "Memory"), ("system", "System")):
                 with TabPane(title, id=f"tab-{tab}"), VerticalScroll():
                     yield from self._compose_tab(tab)
+            with TabPane("Table", id="tab-table"):
+                yield StatsTable(self.window_s, self._stat_rows, self._capture_meta)
 
         yield VerticalScroll(DataTable(id="procs", zebra_stripes=True))
 
@@ -270,6 +280,7 @@ class DltopApp(App):
         try:
             self._refresh_cards()
             self._refresh_procs()
+            self.query_one(StatsTable).refresh_stats()
         except NoMatches:
             # Benign at teardown (widgets already gone); during normal operation
             # it would signal a real id/query mismatch, so leave a debug trace
@@ -402,6 +413,50 @@ class DltopApp(App):
                 "—" if math.isnan(p["rss_mb"]) else f"{p['rss_mb']:.0f}M",
                 p["cmd"][:120],
             )
+
+    # -- Table tab (Task 6) -----------------------------------------------------------
+
+    def _stat_rows(self) -> list[StatRow]:
+        """Every recorded series as a StatRow: host first, then GPUs, then Prometheus."""
+        rows: list[StatRow] = []
+        for name in sorted(self.store.names(), key=self._row_sort_key):
+            stats = self.store.stats(name, self.window_s)
+            if stats is None:
+                continue
+            if name.startswith("prom:"):
+                _, port, metric = name.split(":", 2)
+                rows.append(StatRow(metric, f":{port}", "", stats))
+                continue
+            base, gpu_idx = split_series_name(name)
+            label = SERIES_LABELS.get(base, base)
+            source = "host" if gpu_idx is None else f"GPU {gpu_idx}"
+            rows.append(StatRow(label, source, SERIES_UNITS.get(base, ""), stats))
+        return rows
+
+    @staticmethod
+    def _row_sort_key(name: str) -> tuple[int, str]:
+        if name.startswith("prom:"):
+            return (2, name)
+        return (1, name) if "@" in name else (0, name)
+
+    def _capture_meta(self) -> CaptureMeta:
+        """Snapshot of measurement context for the Copy-metadata button."""
+        n = self.store.stats("cpu", self.window_s)
+        return CaptureMeta(
+            captured_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+            version=__version__,
+            window_s=self.window_s,
+            n_samples=n.n_samples if n else 0,
+            interval_s=self.interval,
+            hostname=socket.gethostname(),
+            os_desc=f"{platform.system()} {platform.release()}",
+            cpu_desc=(f"{host_cpu_desc()} · {self.sys_state.cpu_count_physical}C/{self.sys_state.cpu_count_logical}T"),
+            ram_gib=self.sys_state.ram_total_gib,
+            gpus=[GpuMeta(g.index, g.name, g.mem_total_mb / 1024.0) for g in self.gpus],
+            driver=self._nv_driver or "?",
+            cuda=self._cuda_ver or "?",
+            prom_endpoints=[],  # populated in Task 7
+        )
 
     # -- bindings --------------------------------------------------------------------
 
