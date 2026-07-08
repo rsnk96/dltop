@@ -8,6 +8,7 @@ import sys
 import time
 from typing import TYPE_CHECKING
 
+from loguru import logger
 from textual.app import App
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -270,7 +271,10 @@ class DltopApp(App):
             self._refresh_cards()
             self._refresh_procs()
         except NoMatches:
-            return
+            # Benign at teardown (widgets already gone); during normal operation
+            # it would signal a real id/query mismatch, so leave a debug trace
+            # rather than freezing the panels completely silently.
+            logger.debug("_tick refresh skipped: queried a widget that is not mounted")
 
     def _push_series(self) -> None:
         """Record one sample per series: plain names for host, ``name@{i}`` per GPU.
