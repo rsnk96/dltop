@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import socketserver
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING
@@ -76,6 +78,28 @@ def test_discover_finds_only_real_exposition_endpoints(metrics_server: int) -> N
     assert [ep.port for ep in found] == [metrics_server]
     assert "vllm_num_requests_running" in found[0].metrics
     assert len(found[0].metrics) <= MAX_METRICS_PER_ENDPOINT
+
+
+@pytest.fixture
+def raw_tcp_server() -> Iterator[int]:
+    """Serve a non-HTTP protocol so urllib raises BadStatusLine when probed."""
+    server = socketserver.TCPServer(("127.0.0.1", 0), _GarbageHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield server.server_address[1]
+    server.shutdown()
+
+
+class _GarbageHandler(socketserver.BaseRequestHandler):
+    def handle(self) -> None:
+        with contextlib.suppress(OSError):
+            self.request.recv(1024)
+            self.request.sendall(b"NOT-HTTP garbage\r\n\r\n")
+
+
+def test_discover_survives_non_http_service(raw_tcp_server: int) -> None:
+    """A non-HTTP listener must be skipped, not crash discovery (regression)."""
+    assert discover(ports=[raw_tcp_server], timeout=0.3) == []
 
 
 def test_scraper_records_gauges_and_counter_rates(metrics_server: int) -> None:

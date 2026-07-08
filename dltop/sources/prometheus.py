@@ -9,6 +9,7 @@ meaningless as single lines on a chart.
 
 from __future__ import annotations
 
+import http.client
 import math
 import re
 import subprocess
@@ -114,7 +115,10 @@ def _probe(port: int, timeout: float) -> str | None:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310 - localhost only
             body = resp.read(MAX_RESPONSE_BYTES).decode("utf-8", errors="replace")
-    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError):
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, http.client.HTTPException):
+        # A non-HTTP service on this port makes urllib raise http.client
+        # exceptions (e.g. BadStatusLine) that are NOT OSError subclasses; a
+        # probe of a random listener must never crash discovery.
         return None
     if "# TYPE" in body or _SAMPLE_RE.match(body.lstrip().splitlines()[0] if body.strip() else ""):
         return body

@@ -18,16 +18,18 @@ def _id_safe(name: str) -> str:
     """Encode a series name for use inside a Textual widget id.
 
     Textual ids may only contain letters, numbers, underscores and hyphens, but
-    per-GPU series names look like ``sm@1`` -- ``@`` is illegal there. None of the
-    base series names contain a hyphen, so substituting one in is unambiguous to
-    reverse with :func:`_from_id_safe`.
+    series names carry two illegal characters: per-GPU names look like ``sm@1``
+    (``@``) and Prometheus names look like ``prom:9199:queue_depth`` (``:``).
+    Series names never contain a hyphen (base names use ``_``, Prometheus metric
+    names are ``[a-zA-Z0-9_:]``), so the hyphenated tokens below can only come
+    from encoding and are unambiguous to reverse with :func:`_from_id_safe`.
     """
-    return name.replace("@", "-at-")
+    return name.replace("@", "-at-").replace(":", "-colon-")
 
 
 def _from_id_safe(safe: str) -> str:
     """Invert :func:`_id_safe`."""
-    return safe.replace("-at-", "@")
+    return safe.replace("-colon-", ":").replace("-at-", "@")
 
 
 class SeriesToggles(Vertical):
