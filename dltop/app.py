@@ -13,6 +13,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import DataTable, Footer, Header, Static, TabbedContent, TabPane
 
+from dltop.metrics import MetricStore
 from dltop.models import (
     ALL_ACTIVE_BY_DEFAULT,
     ALL_RECOLOUR,
@@ -97,6 +98,7 @@ class DltopApp(App):
         super().__init__()
         self.interval = interval
         self.no_dcgm = no_dcgm
+        self.store = MetricStore()
         self.gpus: list[GpuState] = []
         self.sys_state: SystemState = SystemState()
         self.dcgm: DcgmProbe | None = None
@@ -174,18 +176,25 @@ class DltopApp(App):
         all_series = self._all_series()
         with TabbedContent(id="tabs"):
             with TabPane("All", id="tab-all"), Vertical():
-                yield TimeSeriesPlot(all_series, "All metrics", plot_id="all-plot")
+                yield TimeSeriesPlot(self.store, all_series, "All metrics", plot_id="all-plot")
                 yield SeriesToggles("all-plot", all_series)
             with TabPane("Compute", id="tab-compute"), Vertical():
                 yield TimeSeriesPlot(
-                    self._compute_series, "Compute: CPU, GPU SM, encode/decode", plot_id="compute-plot"
+                    self.store,
+                    self._compute_series,
+                    "Compute: CPU, GPU SM, encode/decode",
+                    plot_id="compute-plot",
                 )
                 yield SeriesToggles("compute-plot", self._compute_series)
             with TabPane("Memory", id="tab-memory"), Vertical():
-                yield TimeSeriesPlot(MEMORY_SERIES, "Memory: RAM, GPU VRAM, VRAM bandwidth", plot_id="memory-plot")
+                yield TimeSeriesPlot(
+                    self.store, MEMORY_SERIES, "Memory: RAM, GPU VRAM, VRAM bandwidth", plot_id="memory-plot"
+                )
                 yield SeriesToggles("memory-plot", MEMORY_SERIES)
             with TabPane("System", id="tab-system"), Vertical():
-                yield TimeSeriesPlot(SYSTEM_SERIES, "System: PCIe, GPU power, disk, network", plot_id="system-plot")
+                yield TimeSeriesPlot(
+                    self.store, SYSTEM_SERIES, "System: PCIe, GPU power, disk, network", plot_id="system-plot"
+                )
                 yield SeriesToggles("system-plot", SYSTEM_SERIES)
 
         yield VerticalScroll(DataTable(id="procs", zebra_stripes=True))
@@ -236,10 +245,6 @@ class DltopApp(App):
     def _push_series(self) -> None:
         now = time.time()
         # Across multiple GPUs we aggregate by max so a hot GPU isn't smoothed away.
-        all_plot = self.query_one("#all-plot", TimeSeriesPlot)
-        compute_plot = self.query_one("#compute-plot", TimeSeriesPlot)
-        memory_plot = self.query_one("#memory-plot", TimeSeriesPlot)
-        system_plot = self.query_one("#system-plot", TimeSeriesPlot)
 
         # -- Compute: host CPU + GPU compute engines + media encode/decode --------------
         compute: dict[str, float] = {
@@ -283,14 +288,10 @@ class DltopApp(App):
             "net_tx": min(100.0, self.sys_state.net_tx_mbs),
         }
 
-        compute_plot.push(compute, ts=now)
-        memory_plot.push(memory, ts=now)
-        system_plot.push(system, ts=now)
-        # The "All" tab overlays everything; push() only updates the names it knows.
-        for samples in (compute, memory, system):
-            all_plot.push(samples, ts=now)
-
-        for plot in (all_plot, compute_plot, memory_plot, system_plot):
+        self.store.record_many({**compute, **memory, **system}, ts=now)
+        # The "All" tab reads the same names from the same store, so it needs no
+        # separate feed -- every plot just re-reads whatever names it cares about.
+        for plot in self.query(TimeSeriesPlot):
             plot.replot()
 
     def _refresh_cards(self) -> None:

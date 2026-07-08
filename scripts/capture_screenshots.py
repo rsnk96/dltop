@@ -139,10 +139,11 @@ async def _capture(warmup: float, size: tuple[int, int], interval: float) -> dic
         plots = [app.query_one(f"#{pid}", TimeSeriesPlot) for pid in plot_ids]
         while time.monotonic() - start < warmup:
             sample = _demo_sample(time.monotonic() - start)
+            app.store.record_many(sample)
             for plot in plots:
-                plot.push(sample)
+                plot.replot()
             await asyncio.sleep(interval)
-        print(f"warmed up for {warmup:.0f}s ({len(plots[0]._data['cpu'])} samples)")
+        print(f"warmed up for {warmup:.0f}s ({len(app.store.tail('cpu', 10_000))} samples)")
 
         for tab in TABS:
             app.query_one("#tabs").active = tab

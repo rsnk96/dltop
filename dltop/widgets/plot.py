@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import math
 import time
-from collections import deque
 from typing import TYPE_CHECKING
 
 from rich.text import Text
 from textual.widget import Widget
 
-from dltop.models import HISTORY_LEN, SeriesDef
-
 if TYPE_CHECKING:
     from rich.console import RenderableType
+
+    from dltop.metrics import MetricStore
+    from dltop.models import SeriesDef
 
 AXIS_STYLE = "color(244)"  # dim grey for axis ticks and labels
 START_MARKER_GLYPH = "┊"  # dotted vertical rule marking when dltop started logging
@@ -23,7 +23,8 @@ START_MARKER_STYLE = "dim color(244)"
 class TimeSeriesPlot(Widget):
     """Multi-series overlaid time-series chart with interleaved colours.
 
-    Each series keeps its own ring buffer of ``(wall_timestamp, value)`` points.
+    Each series' history lives in a shared ``MetricStore`` ring buffer of
+    ``(wall_timestamp, value)`` points, written by the app's sampling loop.
     Every paint rasterises all visible series as box-drawing strokes
     (``─ ╭ ╮ ╰ ╯ │``, the crisp continuous look of nvtop/asciichart) onto one
     shared character canvas at their *true* vertical positions.
@@ -47,26 +48,21 @@ class TimeSeriesPlot(Widget):
 
     def __init__(
         self,
+        store: MetricStore,
         series: list[SeriesDef],
         chart_title: str,
         plot_id: str,
+        *,
+        scale_to_peak: bool = False,
     ) -> None:
-        """Build a chart for ``series`` (name, ansi256_idx, label, default_visible) tuples."""
+        """Build a chart over ``store`` for ``series`` (name, ansi256_idx, label, default_visible)."""
         super().__init__(id=plot_id)
+        self._store = store
         self._series_defs = series
-        self._data: dict[str, deque[tuple[float, float]]] = {
-            name: deque(maxlen=HISTORY_LEN) for name, _, _, _ in series
-        }
         self._visible: dict[str, bool] = {name: default for name, _, _, default in series}
         self._chart_title = chart_title
         self._y_max = 100.0
-
-    def push(self, samples: dict[str, float], *, ts: float | None = None) -> None:
-        """Append the latest sample for any series named in ``samples``."""
-        when = ts if ts is not None else time.time()
-        for name, value in samples.items():
-            if name in self._data:
-                self._data[name].append((when, value))
+        self._scale_to_peak = scale_to_peak
 
     def set_visible(self, name: str, *, visible: bool) -> None:
         """Toggle a series on/off and force an immediate redraw."""
@@ -79,7 +75,7 @@ class TimeSeriesPlot(Widget):
         self._y_max = max(1.0, y_max)
 
     def replot(self) -> None:
-        """Public redraw entry point; call after any batch of ``push`` calls."""
+        """Public redraw entry point; call after any batch of ``store.record*`` calls."""
         self.refresh()
 
     # -- rendering -------------------------------------------------------------
@@ -101,7 +97,7 @@ class TimeSeriesPlot(Widget):
         One buffer slot per display column, no resampling -- ``offset`` is how many
         columns on the left are still blank (0 once ``name`` has ``width`` samples).
         """
-        buf = list(self._data[name])[-width:] if width > 0 else []
+        buf = self._store.tail(name, width)
         return buf, width - len(buf)
 
     def _marker_column(self, plot_w: int) -> int | None:
@@ -174,6 +170,10 @@ class TimeSeriesPlot(Widget):
         rows = max(1, plot_h - 1)
         for sidx, (name, _, _) in enumerate(vis):
             buf, offset = self._visible_slice(name, plot_w)
+            y_max = self._y_max
+            if self._scale_to_peak:
+                peak = max((v for _, v in buf if math.isfinite(v)), default=0.0)
+                y_max = peak if peak > 0 else 1.0
             prev: int | None = None
             for cx in range(plot_w):
                 if cx < offset:  # not enough history yet to reach this column -- leave blank
@@ -181,7 +181,7 @@ class TimeSeriesPlot(Widget):
                     continue
                 _, raw = buf[cx - offset]
                 value = raw if math.isfinite(raw) else 0.0
-                frac = min(1.0, max(0.0, value / self._y_max))
+                frac = min(1.0, max(0.0, value / y_max))
                 cy = round((1.0 - frac) * rows)
                 self._mark_edge(glyphs, owners, (cx, cy), prev, sidx)
                 prev = cy
@@ -217,7 +217,10 @@ class TimeSeriesPlot(Widget):
                 # self-describing. Use the same "│" as the unlabelled rows (not a "┤"
                 # tick) so the axis is one straight vertical line — a "┤" glyph renders
                 # its stroke slightly right of "│", making the axis bump into the chart.
-                line.append(f"{self._y_max * (1 - cy / (plot_h - 1)):3.0f}%│ ", style=AXIS_STYLE)
+                if self._scale_to_peak:
+                    line.append(f"{100 * (1 - cy / (plot_h - 1)):3.0f}ᵖ│ ", style=AXIS_STYLE)
+                else:
+                    line.append(f"{self._y_max * (1 - cy / (plot_h - 1)):3.0f}%│ ", style=AXIS_STYLE)
             else:
                 line.append("    │ ", style=AXIS_STYLE)
             start_cx = 0

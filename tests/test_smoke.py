@@ -103,20 +103,21 @@ def test_clamp_pct_handles_nan_and_range() -> None:
 
 
 def test_timeseries_plot_renders_before_first_push() -> None:
-    """Textual can paint TimeSeriesPlot during initial layout, before any push() runs.
+    """Textual can paint TimeSeriesPlot during initial layout, before the store has any data.
 
     WHY: the widget is composed inside a TabbedContent and gets a paint pass while
-    its ring buffers are still empty. If rasterising empty series raised (the old
+    its backing store is still empty. If rasterising empty series raised (the old
     plotext empty-state IndexError did, on short canvases), the whole TUI dies on
     the first frame. This guards the empty-data path: it must yield a valid canvas
     and a renderable, never an exception.
     """
     from rich.text import Text
 
+    from dltop.metrics import MetricStore
     from dltop.models import COMPUTE_SERIES_DCGM
     from dltop.widgets.plot import TimeSeriesPlot
 
-    plot = TimeSeriesPlot(COMPUTE_SERIES_DCGM, "test", "compute-plot")
+    plot = TimeSeriesPlot(MetricStore(), COMPUTE_SERIES_DCGM, "test", "compute-plot")
     # Pure rasterisation must not raise with empty ring buffers...
     glyphs, owners = plot._rasterize(plot._visible_series(), 40, 40)
     assert isinstance(glyphs, dict)
@@ -135,10 +136,11 @@ def test_render_never_crashes_the_tui() -> None:
     """
     from rich.text import Text
 
+    from dltop.metrics import MetricStore
     from dltop.models import COMPUTE_SERIES_DCGM
     from dltop.widgets.plot import TimeSeriesPlot
 
-    plot = TimeSeriesPlot(COMPUTE_SERIES_DCGM, "boom", "compute-plot")
+    plot = TimeSeriesPlot(MetricStore(), COMPUTE_SERIES_DCGM, "boom", "compute-plot")
 
     def explode() -> object:
         msg = "simulated draw failure"
@@ -163,16 +165,19 @@ def test_overlapping_series_are_never_hidden() -> None:
     """
     import time
 
+    from dltop.metrics import MetricStore
     from dltop.models import COMPUTE_SERIES_NVML
     from dltop.widgets.plot import TimeSeriesPlot
 
-    plot = TimeSeriesPlot(COMPUTE_SERIES_NVML, "test", "compute-plot")
+    store = MetricStore()
+    plot = TimeSeriesPlot(store, COMPUTE_SERIES_NVML, "test", "compute-plot")
     names = [s[0] for s in COMPUTE_SERIES_NVML]
     now = time.time()
     # First two series share the exact same value; the rest sit at 0%.
     values = {names[0]: 50.0, names[1]: 50.0, names[2]: 0.0, names[3]: 0.0}
     for name, val in values.items():
-        plot._data[name].extend([(now, val), (now + 1, val)])
+        store.record(name, val, ts=now)
+        store.record(name, val, ts=now + 1)
 
     vis = plot._visible_series()
     idx = {name: i for i, (name, _, _) in enumerate(vis)}

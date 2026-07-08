@@ -32,7 +32,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8.0"]
+test = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 screenshots = ["cairosvg>=2.7"]
 
 [project.scripts]
@@ -83,3 +83,4 @@ ignore = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+asyncio_mode = "auto"
