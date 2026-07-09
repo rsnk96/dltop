@@ -29,3 +29,6 @@ CLAUDE.local.md
 .claude/settings.local.json
 .claude/plans/
 .superpowers/
+
+# Screenshot captures live on the GitHub release, not in the tree
+assets/screenshots/
