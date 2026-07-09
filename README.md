@@ -22,29 +22,29 @@ Captured in `--demo` mode (synthetic 2-GPU telemetry — see [Demo mode](#demo-m
 ### All
 The default overview — every metric on one axis, with **CPU, RAM, GPU SM and GPU VRAM** on by default. Glance once: is anything busy?
 
-<img src="https://raw.githubusercontent.com/rsnk96/dltop/main/assets/screenshots/all.png" alt="dltop — All tab" width="100%">
+<img src="https://github.com/rsnk96/dltop/releases/download/v0.2.1/all.png" alt="dltop — All tab" width="100%">
 
 ### Compute
 Host CPU plus the GPU compute engines. On data-center GPUs the DCGM split breaks SM into **Tensor, FP32, FP16 and FP64** — see exactly which math your model is doing.
 
-<img src="https://raw.githubusercontent.com/rsnk96/dltop/main/assets/screenshots/compute.png" alt="dltop — Compute tab" width="100%">
+<img src="https://github.com/rsnk96/dltop/releases/download/v0.2.1/compute.png" alt="dltop — Compute tab" width="100%">
 
 ### Memory
 Host **RAM**, GPU **VRAM** and **VRAM bandwidth** — watch memory fill as a model loads and catch bandwidth saturation.
 
-<img src="https://raw.githubusercontent.com/rsnk96/dltop/main/assets/screenshots/memory.png" alt="dltop — Memory tab" width="100%">
+<img src="https://github.com/rsnk96/dltop/releases/download/v0.2.1/memory.png" alt="dltop — Memory tab" width="100%">
 
 ### System
 **PCIe** in/out, GPU **power** draw, **disk** and **network** — the plumbing around the GPU.
 
-<img src="https://raw.githubusercontent.com/rsnk96/dltop/main/assets/screenshots/system.png" alt="dltop — System tab" width="100%">
+<img src="https://github.com/rsnk96/dltop/releases/download/v0.2.1/system.png" alt="dltop — System tab" width="100%">
 
 ### Table
 Every series — host, per-GPU, and any auto-discovered Prometheus metric — as a row of rolling-window stats (**Now, Mean, Median, Stddev**) over the last `--window` seconds. Four buttons copy the current snapshot straight to the clipboard: **Markdown**, **web table (HTML)**, **Excel (TSV)**, or a **capture-metadata** block (timestamp, dltop version, hostname, OS, CPU, RAM, GPU(s), driver/CUDA versions, and any Prometheus endpoints) — handy for pasting into a bug report or a training-run log.
 
-<img src="https://raw.githubusercontent.com/rsnk96/dltop/main/assets/screenshots/table.png" alt="dltop — Table tab" width="100%">
+<img src="https://github.com/rsnk96/dltop/releases/download/v0.2.1/table.png" alt="dltop — Table tab" width="100%">
 
-> The screenshots above are stored via [Git LFS](https://git-lfs.com), so a plain clone (or a `pip install` from Git) only pulls tiny pointer files unless you explicitly fetch the LFS objects. Regenerate them anytime with `pip install -e ".[screenshots]"` then `python scripts/capture_screenshots.py`.
+> The screenshots above are hosted as assets on the [latest release](https://github.com/rsnk96/dltop/releases/latest) rather than committed to the repo, so a clone stays small and the images render identically on GitHub and PyPI. Regenerate them anytime with `pip install -e ".[screenshots]"` then `python scripts/capture_screenshots.py` (writes to `assets/screenshots/`, which is git-ignored), and re-upload with `gh release upload <tag> assets/screenshots/*.png`.
 
 ## Installation
 
