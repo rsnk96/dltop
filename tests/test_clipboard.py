@@ -92,9 +92,9 @@ def test_local_copy_falls_through_when_a_tool_fails(monkeypatch: pytest.MonkeyPa
     assert tried == ["wl-copy", "xclip"]  # fell through the failed wl-copy
 
 
-def test_local_copy_html_skips_incapable_tools(monkeypatch: pytest.MonkeyPatch) -> None:
-    # xsel is "installed" but can't set text/html, so it must be skipped for xclip.
-    monkeypatch.setattr(clipboard.shutil, "which", lambda exe: exe if exe in {"xsel", "xclip"} else None)
+def test_local_copy_html_uses_html_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    # xclip is the only tool present; it must be invoked with the text/html target.
+    monkeypatch.setattr(clipboard.shutil, "which", lambda exe: exe if exe == "xclip" else None)
     seen: list[list[str]] = []
 
     def fake_run(cmd: list[str], *, input: bytes, **_kw: object) -> _Result:  # noqa: A002
@@ -105,6 +105,22 @@ def test_local_copy_html_skips_incapable_tools(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(clipboard.subprocess, "run", fake_run)
     assert clipboard._local_copy("<table></table>", mime="text/html") is True
     assert seen == [["xclip", "-selection", "clipboard", "-t", "text/html"]]
+
+
+def test_local_copy_html_false_when_only_incapable_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Only xsel/pbcopy present -- neither can set text/html, so nothing is run
+    # and the copy reports failure (caller then falls back to plain text).
+    monkeypatch.setattr(clipboard.shutil, "which", lambda exe: exe if exe in {"xsel", "pbcopy"} else None)
+    ran = False
+
+    def fake_run(*_args: object, **_kw: object) -> _Result:
+        nonlocal ran
+        ran = True
+        return _Result(0)
+
+    monkeypatch.setattr(clipboard.subprocess, "run", fake_run)
+    assert clipboard._local_copy("<table></table>", mime="text/html") is False
+    assert ran is False  # incapable tools are skipped without invoking any command
 
 
 def test_local_copy_returns_false_when_no_tool(monkeypatch: pytest.MonkeyPatch) -> None:

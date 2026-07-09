@@ -16,6 +16,12 @@ Three concerns are juggled here:
 * **Graceful fallback** -- if no HTML-capable tool is available (or we're over
   SSH), the caller's plain-text form is used instead, so a "web table" copy
   still lands as readable text rather than raw ``<table>`` markup.
+
+Note: a single ``wl-copy``/``xclip`` invocation advertises only the one MIME
+target it was given, so after a successful rich copy the local clipboard holds
+``text/html`` *only* -- pasting into a strict plain-text consumer yields
+nothing. That's an accepted tradeoff for the web-table button (its job is rich
+paste; the Markdown/TSV buttons cover plain text).
 """
 
 from __future__ import annotations
