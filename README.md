@@ -44,8 +44,6 @@ Every series — host, per-GPU, and any auto-discovered Prometheus metric — as
 
 <img src="https://github.com/rsnk96/dltop/releases/download/v0.2.1/table.png" alt="dltop — Table tab" width="100%">
 
-> The screenshots above are hosted as assets on the [latest release](https://github.com/rsnk96/dltop/releases/latest) rather than committed to the repo, so a clone stays small and the images render identically on GitHub and PyPI. Regenerate them anytime with `pip install -e ".[screenshots]"` then `python scripts/capture_screenshots.py` (writes to `assets/screenshots/`, which is git-ignored), and re-upload with `gh release upload <tag> assets/screenshots/*.png`.
-
 ## Installation
 
 ### From PyPI (recommended)
@@ -100,7 +98,13 @@ Switch tabs (**All · Compute · Memory · System · Table**) by clicking them, 
 
 ### Prometheus auto-discovery
 
-On startup (unless `--no-discover` is passed), `dltop` enumerates locally listening TCP ports (via `psutil`, falling back to `ss -lnt`), probes each with a short-timeout `GET /metrics`, and treats any response that looks like Prometheus text-exposition format as a hit. Up to 30 gauge/counter metrics per discovered endpoint are added as extra, default-off series on the **All** tab, scraped on a background thread every `max(--interval, 1)` seconds. Histograms and summaries are skipped (their component series aren't meaningful as single lines). Disable the whole probe with `--no-discover` if you'd rather not have `dltop` touch other local sockets.
+Local services — training loops, inference runtimes like vLLM, node exporters — often already publish metrics in Prometheus format. On startup (unless `--no-discover` is passed), `dltop` pulls those in automatically, in three steps:
+
+1. **Finds local web services** — enumerates the TCP ports listening on `localhost` (via `psutil`, falling back to `ss -lnt`).
+2. **Checks each for a `/metrics` endpoint** — probes with a short-timeout `GET /metrics` and keeps any response that parses as Prometheus text-exposition format.
+3. **Renders them** — up to 30 gauge/counter metrics per endpoint become series in their own peak-scaled **Prometheus** chart on the **All** tab (and rows on the **Table** tab), shown by default and scraped on a background thread every `max(--interval, 1)` seconds. Toggle any off with the per-series checkboxes.
+
+Histograms and summaries are skipped (their component series aren't meaningful as single lines). Disable the whole probe with `--no-discover` if you'd rather not have `dltop` touch other local sockets.
 
 ## Related projects
 
