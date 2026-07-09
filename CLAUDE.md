@@ -49,3 +49,12 @@ Tests in `tests/` intentionally avoid touching NVML (they run on the GPU-less Gi
 ## Ruff config
 
 `select = ["ALL"]` with these ignores (in `pyproject.toml`): `D203`, `D213`, `COM812`, `PLR2004`. If a new rule fires noisily across the file for a good reason, discuss before adding to the ignore list — the bar is "conflicts with formatter" or "genuinely not applicable", not "annoying right now".
+
+## Screenshots & releases
+
+- **README screenshots are release assets, not repo files.** `assets/screenshots/` is git-ignored; committing the PNGs (even via Git LFS) breaks rendering — GitHub serves an LFS pointer / raw blob referenced by `<img src>` as `text/plain`, so the image never loads on GitHub or PyPI.
+- **Regenerate:** `pip install -e ".[screenshots]"` then `python scripts/capture_screenshots.py` (writes to `assets/screenshots/`, demo mode — no GPU needed).
+- **Publish:** upload to the release so the README `<img src=".../releases/download/<tag>/*.png">` URLs resolve — `gh release upload <tag> assets/screenshots/*.png` (or attach on `gh release create`). These serve as `application/octet-stream`, which GitHub and PyPI render fine in `<img>`.
+- **Cutting a release:** bump `version` in `pyproject.toml` (single source; `_version.py` reads installed metadata), then push a `vX.Y.Z` tag — `release.yml` triggers on the tag (not on the GitHub Release object), runs ruff/black/pytest, builds, and trusted-publishes to PyPI.
+- **PyPI is append-only.** It rejects re-uploading a version that already exists, and freezes each version's long-description (README) at publish time. So a README-only fix that must reach PyPI still needs a fresh version bump — you cannot overwrite the previous one (e.g. the 0.2.1 → 0.2.2 doc re-release).
+- README `<img>` URLs are pinned to a specific tag's release assets, so bump them (and re-upload the PNGs to the new tag) only when the *screenshots themselves* change — a plain doc/version bump reuses the existing assets.
