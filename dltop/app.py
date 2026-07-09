@@ -86,17 +86,30 @@ class DltopApp(App):
         height: 1fr;
         min-height: 18;
     }
+    .tab-scroll {
+        /* Subtle, thin scrollbar -- the partial next chart is the main
+           "there's more below" hint; the bar just confirms it. */
+        scrollbar-size-vertical: 1;
+        scrollbar-background: $surface;
+        scrollbar-background-hover: $surface;
+        scrollbar-background-active: $surface;
+        scrollbar-color: $panel-lighten-2;
+        scrollbar-color-hover: $accent;
+        scrollbar-color-active: $accent;
+    }
     .chart-block {
         height: auto;
     }
     .chart-block TimeSeriesPlot {
-        height: 16;
-        min-height: 10;
+        /* Kept short on purpose: the next chart peeks in below the fold so
+           it's obvious the tab scrolls. */
+        height: 11;
+        min-height: 8;
     }
-    #procs {
+    .procs {
         height: auto;
-        max-height: 12;
         border-top: solid $accent;
+        margin-top: 1;
     }
     .paused-label {
         color: $warning;
@@ -225,6 +238,9 @@ class DltopApp(App):
                 scale_to_peak=True,
             )
             yield Vertical(plot, SeriesToggles("all-prom-plot", series), classes="chart-block")
+        # Processes ride at the very bottom of the same scroll, so the whole tab
+        # is one continuous top-to-bottom read rather than two separate panes.
+        yield DataTable(zebra_stripes=True, classes="procs")
 
     def _prom_series_defs(self) -> list[SeriesDef]:
         """One default-off series per discovered metric; colours cycle the palette."""
@@ -259,12 +275,10 @@ class DltopApp(App):
             yield GpuToggles(self.gpus)
         with TabbedContent(id="tabs"):
             for tab, title in (("all", "All"), ("compute", "Compute"), ("memory", "Memory"), ("system", "System")):
-                with TabPane(title, id=f"tab-{tab}"), VerticalScroll():
+                with TabPane(title, id=f"tab-{tab}"), VerticalScroll(classes="tab-scroll"):
                     yield from self._compose_tab(tab)
             with TabPane("Table", id="tab-table"):
                 yield StatsTable(self.window_s, self._stat_rows, self._capture_meta)
-
-        yield VerticalScroll(DataTable(id="procs", zebra_stripes=True))
 
         yield Footer()
 
@@ -278,9 +292,9 @@ class DltopApp(App):
         self.title = "dltop"
         self.sub_title = self._header_name()
 
-        procs = self.query_one("#procs", DataTable)
-        procs.add_columns("GPU", "PID", "USER", "TYPE", "GPU-MEM", "%CPU", "HOST-MEM", "COMMAND")
-        procs.cursor_type = "row"
+        for procs in self.query(".procs").results(DataTable):
+            procs.add_columns("GPU", "PID", "USER", "TYPE", "GPU-MEM", "%CPU", "HOST-MEM", "COMMAND")
+            procs.cursor_type = "row"
 
         banner_text = "\n".join(note for note in (self.dcgm_note, self._prom_note) if note)
         if banner_text:
@@ -434,23 +448,29 @@ class DltopApp(App):
         self.query_one("#sys-card", InfoCard).update_rows(sys_rows)
 
     def _refresh_procs(self) -> None:
+        # Enumerate once; the process table is composed once per chart tab so it
+        # sits at the bottom of each tab's scroll -- repaint every copy.
         procs = self.demo.processes() if self.demo is not None else _collect_processes(self.gpus, self._proc_cache)
-        table = self.query_one("#procs", DataTable)
-        table.clear()
-        if not procs:
-            table.add_row("—", "—", "—", "—", "—", "—", "—", "(no GPU processes)")
-            return
-        for p in procs:
-            table.add_row(
-                str(p["gpu"]),
-                str(p["pid"]),
-                p["user"],
-                p["type"],
-                f"{p['mem_mb']:.0f} MiB",
-                "—" if math.isnan(p["cpu_pct"]) else f"{p['cpu_pct']:.0f}",
-                "—" if math.isnan(p["rss_mb"]) else f"{p['rss_mb']:.0f}M",
-                p["cmd"][:120],
-            )
+        if procs:
+            rows = [
+                (
+                    str(p["gpu"]),
+                    str(p["pid"]),
+                    p["user"],
+                    p["type"],
+                    f"{p['mem_mb']:.0f} MiB",
+                    "—" if math.isnan(p["cpu_pct"]) else f"{p['cpu_pct']:.0f}",
+                    "—" if math.isnan(p["rss_mb"]) else f"{p['rss_mb']:.0f}M",
+                    p["cmd"][:120],
+                )
+                for p in procs
+            ]
+        else:
+            rows = [("—", "—", "—", "—", "—", "—", "—", "(no GPU processes)")]
+        for table in self.query(".procs").results(DataTable):
+            table.clear()
+            for row in rows:
+                table.add_row(*row)
 
     # -- Table tab (Task 6) -----------------------------------------------------------
 

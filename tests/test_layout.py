@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from textual.containers import VerticalScroll
+from textual.widgets import DataTable
+
 from dltop.app import DltopApp
 from dltop.models import HOST_SERIES, per_gpu
 from dltop.widgets.plot import TimeSeriesPlot
@@ -47,3 +50,19 @@ async def test_single_gpu_shows_no_gpu_toggle_row() -> None:
     async with app.run_test(size=(140, 50)) as pilot:
         await pilot.pause()
         assert not app.query("GpuToggles")
+
+
+async def test_processes_ride_at_bottom_of_each_chart_tab_scroll() -> None:
+    app = DltopApp(interval=0.1, no_dcgm=True, demo_gpus=2, no_discover=True)
+    async with app.run_test(size=(140, 50)) as pilot:
+        await pilot.pause()
+        for _ in range(3):
+            await pilot.pause(0.1)
+        procs = list(app.query(".procs").results(DataTable))
+        # One per chart tab (all/compute/memory/system) -- not the Table tab.
+        assert len(procs) == 4
+        # Each rides inside a scroll container (part of the scroll), not a fixed pane.
+        for table in procs:
+            assert any(isinstance(a, VerticalScroll) for a in table.ancestors)
+        # And it is populated from the tick like before.
+        assert any(table.row_count > 0 for table in procs)
