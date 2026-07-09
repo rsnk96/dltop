@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from textual.containers import VerticalScroll
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Static
 
 from dltop.app import DltopApp
 from dltop.models import HOST_SERIES, per_gpu
@@ -66,3 +66,24 @@ async def test_processes_ride_at_bottom_of_each_chart_tab_scroll() -> None:
             assert any(isinstance(a, VerticalScroll) for a in table.ancestors)
         # And it is populated from the tick like before.
         assert any(table.row_count > 0 for table in procs)
+
+
+async def test_scroll_hints_track_position() -> None:
+    # A short terminal guarantees the content overflows so hints are meaningful.
+    app = DltopApp(interval=0.1, no_dcgm=True, demo_gpus=2, no_discover=True)
+    async with app.run_test(size=(120, 20)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        pane = app.query_one("#tab-all")
+        top = pane.query_one(".scroll-hint-top", Static)
+        bottom = pane.query_one(".scroll-hint-bottom", Static)
+        inner = pane.query_one(".hinted-inner", VerticalScroll)
+        # At the top: nothing above, more below.
+        assert "▴" not in str(top.render())
+        assert "▾" in str(bottom.render())
+        # Scroll to the end: more above, nothing below.
+        inner.scroll_end(animate=False)
+        await pilot.pause()
+        await pilot.pause()
+        assert "▴" in str(top.render())
+        assert "▾" not in str(bottom.render())

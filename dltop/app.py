@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 from textual.app import App
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical
 from textual.css.query import NoMatches
 from textual.widgets import DataTable, Footer, Header, Static, TabbedContent, TabPane
 
@@ -40,6 +40,7 @@ from dltop.sources.prometheus import PromEndpoint, PromScraper, discover
 from dltop.sources.system import init_system, psutil, sample_system
 from dltop.widgets.cards import InfoCard
 from dltop.widgets.plot import TimeSeriesPlot
+from dltop.widgets.scroll import HintedScroll
 from dltop.widgets.stats_table import StatsTable
 from dltop.widgets.toggles import GpuToggles, SeriesToggles
 
@@ -110,6 +111,9 @@ class DltopApp(App):
         height: auto;
         border-top: solid $accent;
         margin-top: 1;
+    }
+    .scroll-tail {
+        height: 3;
     }
     .paused-label {
         color: $warning;
@@ -241,6 +245,9 @@ class DltopApp(App):
         # Processes ride at the very bottom of the same scroll, so the whole tab
         # is one continuous top-to-bottom read rather than two separate panes.
         yield DataTable(zebra_stripes=True, classes="procs")
+        # A little dead space after the table so scrolling to the end visibly
+        # bottoms out -- it's obvious there's nothing more below.
+        yield Static("", classes="scroll-tail")
 
     def _prom_series_defs(self) -> list[SeriesDef]:
         """One default-off series per discovered metric; colours cycle the palette."""
@@ -275,8 +282,8 @@ class DltopApp(App):
             yield GpuToggles(self.gpus)
         with TabbedContent(id="tabs"):
             for tab, title in (("all", "All"), ("compute", "Compute"), ("memory", "Memory"), ("system", "System")):
-                with TabPane(title, id=f"tab-{tab}"), VerticalScroll(classes="tab-scroll"):
-                    yield from self._compose_tab(tab)
+                with TabPane(title, id=f"tab-{tab}"):
+                    yield HintedScroll(*self._compose_tab(tab))
             with TabPane("Table", id="tab-table"):
                 yield StatsTable(self.window_s, self._stat_rows, self._capture_meta)
 
