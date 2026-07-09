@@ -52,8 +52,13 @@ async def test_window_band_aligns_with_stat_columns() -> None:
 async def test_copy_buttons_export_each_format(monkeypatch: pytest.MonkeyPatch) -> None:
     app = await _demo_app_with_data()
     copied: list[str] = []
+    # Patch the clipboard seam the widget imports, so the test captures the text
+    # without actually shelling out to a system clipboard tool.
+    monkeypatch.setattr(
+        "dltop.widgets.stats_table.copy_to_clipboard",
+        lambda _app, text: copied.append(text),
+    )
     async with app.run_test(size=(140, 50)) as pilot:
-        monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
         await pilot.pause()
         for _ in range(3):
             await pilot.pause(0.1)

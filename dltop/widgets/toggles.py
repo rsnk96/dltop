@@ -62,6 +62,20 @@ class SeriesToggles(Vertical):
         border: none;
         background: transparent;
     }
+    /* On focus Textual adds `border: tall $border`, but these checkboxes are
+       only 1 row tall, so that border renders as a solid blue block that hides
+       the whole label. Drop the border and the block-cursor label paint; use a
+       plain underline as the focus cue instead. !important beats the focus and
+       component-class defaults. */
+    SeriesToggles Checkbox:focus {
+        border: none !important;
+        background-tint: 0% !important;
+    }
+    SeriesToggles Checkbox:focus > .toggle--label {
+        color: $text !important;
+        background: transparent !important;
+        text-style: underline !important;
+    }
     """
 
     def __init__(self, plot_id: str, series: list[SeriesDef]) -> None:
@@ -97,6 +111,12 @@ class GpuToggles(Horizontal):
     DEFAULT_CSS = """
     GpuToggles { height: auto; padding: 0 1; background: $surface; }
     GpuToggles Checkbox { margin: 0 2 0 0; width: auto; height: 1; border: none; background: transparent; }
+    GpuToggles Checkbox:focus { border: none !important; background-tint: 0% !important; }
+    GpuToggles Checkbox:focus > .toggle--label {
+        color: $text !important;
+        background: transparent !important;
+        text-style: underline !important;
+    }
     GpuToggles Static { width: auto; padding: 0 1 0 0; color: $accent; text-style: bold; }
     """
 

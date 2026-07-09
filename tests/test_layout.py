@@ -7,7 +7,22 @@ from textual.widgets import DataTable, Static
 
 from dltop.app import DltopApp
 from dltop.models import HOST_SERIES, per_gpu
+from dltop.sources.prometheus import PromEndpoint
 from dltop.widgets.plot import TimeSeriesPlot
+
+
+def test_prometheus_series_default_on_and_sorted() -> None:
+    app = DltopApp(interval=1.0, no_dcgm=True, demo_gpus=1, no_discover=True)
+    app.prom_endpoints = [
+        PromEndpoint(9199, "svc", ["z_metric", "a_metric"]),
+        PromEndpoint(8000, "svc2", ["a_metric"]),
+    ]
+    defs = app._prom_series_defs()
+    names = [name for name, _, _, _ in defs]
+    # Sorted by (metric name, port).
+    assert names == ["prom:8000:a_metric", "prom:9199:a_metric", "prom:9199:z_metric"]
+    # All enabled by default so the All-tab chart isn't blank.
+    assert all(default is True for _, _, _, default in defs)
 
 
 def test_per_gpu_suffixes_names_only() -> None:

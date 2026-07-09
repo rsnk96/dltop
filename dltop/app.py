@@ -250,15 +250,16 @@ class DltopApp(App):
         yield Static("", classes="scroll-tail")
 
     def _prom_series_defs(self) -> list[SeriesDef]:
-        """One default-off series per discovered metric; colours cycle the palette."""
+        """One series per discovered metric, sorted by name and on by default."""
         palette = list(_PALETTE)
+        pairs = sorted(
+            ((ep.port, metric) for ep in self.prom_endpoints for metric in ep.metrics),
+            key=lambda pm: (pm[1], pm[0]),
+        )
         defs: list[SeriesDef] = []
-        n = 0
-        for ep in self.prom_endpoints:
-            for metric in ep.metrics:
-                label = f"◍ {metric[:28]} :{ep.port}"
-                defs.append((f"prom:{ep.port}:{metric}", palette[n % len(palette)], label, False))
-                n += 1
+        for n, (port, metric) in enumerate(pairs):
+            label = f"◍ {metric[:28]} :{port}"
+            defs.append((f"prom:{port}:{metric}", palette[n % len(palette)], label, True))
         return defs
 
     # -- layout ----------------------------------------------------------------------

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, DataTable, Static
 
+from dltop.clipboard import copy as copy_to_clipboard
 from dltop.export import to_html, to_markdown, to_metadata_markdown, to_tsv
 
 if TYPE_CHECKING:
@@ -102,5 +103,5 @@ class StatsTable(Vertical):
                 text, what = to_metadata_markdown(self._meta_provider()), "capture metadata"
             case _:
                 return
-        self.app.copy_to_clipboard(text)
+        copy_to_clipboard(self.app, text)
         self.notify(f"Copied {what} ✓", timeout=3)
