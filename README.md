@@ -11,9 +11,13 @@ This helps identify the choke point for different scales of load on a streaming-
 
 When DCGM is unavailable (consumer GeForce cards, or DCGM not installed), `dltop` falls back to NVML's single lumped SM% (the aggregate compute-utilization proxy shown by `nvidia-smi`) and prints a footer telling you how to enable the full split on a data-center GPU.
 
+### Multi-GPU
+
+Every chart is grouped **one domain per GPU** — never mixed onto a shared axis. On a box with more than one GPU, `dltop` adds a host chart plus one chart per GPU per tab (so a 2-GPU box shows 3 stacked charts on the Compute tab: Host, GPU 0, GPU 1), an info card row per GPU, and a toggle bar to show/hide individual GPUs across every chart at once.
+
 ## Screenshots
 
-Captured on an H100 mid-training. Four tabs, all on one shared time-series axis.
+Captured in `--demo` mode (synthetic 2-GPU telemetry — see [Demo mode](#demo-mode-no-gpu-needed)). Five tabs, all on one shared time-series axis.
 
 ### All
 The default overview — every metric on one axis, with **CPU, RAM, GPU SM and GPU VRAM** on by default. Glance once: is anything busy?
@@ -35,14 +39,25 @@ Host **RAM**, GPU **VRAM** and **VRAM bandwidth** — watch memory fill as a mod
 
 <img src="https://raw.githubusercontent.com/rsnk96/dltop/main/assets/screenshots/system.png" alt="dltop — System tab" width="100%">
 
+### Table
+Every series — host, per-GPU, and any auto-discovered Prometheus metric — as a row of rolling-window stats (**Now, Mean, Median, Stddev**) over the last `--window` seconds. Four buttons copy the current snapshot straight to the clipboard: **Markdown**, **web table (HTML)**, **Excel (TSV)**, or a **capture-metadata** block (timestamp, dltop version, hostname, OS, CPU, RAM, GPU(s), driver/CUDA versions, and any Prometheus endpoints) — handy for pasting into a bug report or a training-run log.
+
+<img src="https://raw.githubusercontent.com/rsnk96/dltop/main/assets/screenshots/table.png" alt="dltop — Table tab" width="100%">
+
 > The screenshots above are stored via [Git LFS](https://git-lfs.com), so a plain clone (or a `pip install` from Git) only pulls tiny pointer files unless you explicitly fetch the LFS objects. Regenerate them anytime with `pip install -e ".[screenshots]"` then `python scripts/capture_screenshots.py`.
 
 ## Installation
 
-### From GitHub (current)
+### From PyPI (recommended)
 
 ```bash
-pip install git+https://github.com/rsnk96/dltop
+pipx install dltop
+```
+
+[`pipx`](https://pipx.pypa.io) installs `dltop` into its own isolated environment while still putting the `dltop` command on your `PATH` — the right way to install a standalone CLI tool. A plain `pip install` works too:
+
+```bash
+pip install dltop
 ```
 
 ### For development
@@ -62,6 +77,11 @@ Once installed, `dltop` is callable from any directory — the same way `htop` i
 dltop                   # 0.5s refresh, DCGM if available
 dltop -i 1              # 1s refresh
 dltop --no-dcgm         # NVML-only (skip DCGM even if installed)
+dltop --window 120      # stats window for the Table tab, seconds (default 60)
+dltop --no-discover     # disable Prometheus /metrics auto-discovery
+dltop --demo            # synthetic 2-GPU telemetry, no NVIDIA hardware needed
+dltop --demo 4          # synthetic N-GPU telemetry
+dltop --version         # print the installed version and exit
 dltop --help
 ```
 
@@ -72,7 +92,15 @@ dltop --help
 | `q`, `Q` | Quit |
 | `space`, `p` | Pause / resume sampling |
 
-Switch tabs (**All · Compute · Memory · System**) by clicking them, or with `←` / `→` when the tab bar is focused. Each chart has per-series checkboxes underneath to toggle individual lines on or off.
+Switch tabs (**All · Compute · Memory · System · Table**) by clicking them, or with `←` / `→` when the tab bar is focused. Each chart has per-series checkboxes underneath to toggle individual lines on or off.
+
+### Demo mode (no GPU needed)
+
+`--demo [N]` swaps NVML/DCGM for a synthetic `N`-GPU source (default 2) so you can try, develop, or screenshot `dltop` on a laptop with no NVIDIA hardware at all — it's also what `scripts/capture_screenshots.py` uses to generate the images above.
+
+### Prometheus auto-discovery
+
+On startup (unless `--no-discover` is passed), `dltop` enumerates locally listening TCP ports (via `psutil`, falling back to `ss -lnt`), probes each with a short-timeout `GET /metrics`, and treats any response that looks like Prometheus text-exposition format as a hit. Up to 30 gauge/counter metrics per discovered endpoint are added as extra, default-off series on the **All** tab, scraped on a background thread every `max(--interval, 1)` seconds. Histograms and summaries are skipped (their component series aren't meaningful as single lines). Disable the whole probe with `--no-discover` if you'd rather not have `dltop` touch other local sockets.
 
 ## Related projects
 
@@ -84,11 +112,6 @@ Switch tabs (**All · Compute · Memory · System**) by clicking them, or with `
 - [nvitop](https://github.com/XuehaiPan/nvitop) — an interactive NVIDIA GPU process viewer.
 
 We use and admire all of these. None of them, individually or together, met the needs we had internally: a single view that splits GPU compute into the lanes a CV/AI engineer reasons about — SM, Tensor, FP16/FP32/FP64 — **and** the media engines (NVENC/NVDEC), overlaid against host CPU/RAM/IO on one time-series, so you can see where a streaming-analytics pipeline actually bottlenecks. So we built `dltop`.
-
-## Roadmap
-
-- [ ] **Prometheus scraping** — graph any local metric exposed on a Prometheus-friendly `/metrics` endpoint, plotted alongside the built-in GPU and host series.
-- [ ] **Stats tab** — a tab with a table documenting every metric and its summary statistics over the current window: average, standard deviation, min and max.
 
 ## Enabling the full compute split (DCGM)
 

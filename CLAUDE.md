@@ -9,9 +9,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Layout
 
-Single-module project: all code lives in `dltop.py` at the repo root. This is intentional — do not split into a package (`dltop/__init__.py`, submodules, etc.) unless explicitly asked.
+Package lives under `dltop/`. Responsibilities:
+- `models.py` — dataclasses, palette, per-tab series tables (host vs GPU domains)
+- `metrics.py` — `MetricStore` (named ring buffers) + rolling-window stats; ALL history flows through it
+- `sources/` — writers: `nvml.py`, `system.py`, `dcgm.py`, `prometheus.py` (discovery+scrape), `demo.py` (`--demo`)
+- `widgets/` — readers: `plot.py`, `cards.py`, `toggles.py`, `stats_table.py`
+- `export.py` — stats snapshot → Markdown/HTML/TSV/metadata (pure functions)
+- `app.py` / `cli.py` — composition and entry point (`dltop = "dltop:main"`)
 
-Entry point: `dltop` → `dltop:main` (defined in `pyproject.toml`).
+Adding a metric source: write a module in `sources/` that records named series into the app's
+`MetricStore`, then give the series a `SeriesDef` so charts/table pick it up. Charts are grouped
+one-domain-per-chart (host / GPU N / Prometheus) — never mix domains on one chart.
 
 ## Architecture
 
@@ -30,12 +38,13 @@ Both paths feed the same `Rich`-rendered TUI. When adding metrics, add them to b
 ## Commands
 
 - Install (editable, with test deps): `pip install -e ".[test]"`
-- Run: `dltop` (flags: `-i/--interval <sec>`, `--no-dcgm`) — callable from any directory once installed
+- Run: `dltop` (flags: `-i/--interval <sec>`, `--no-dcgm`, `--window <sec>`, `--no-discover`, `--demo [N]`, `--version`) — callable from any directory once installed
+- No-hardware dev loop: `dltop --demo 2` (synthetic 2-GPU telemetry, no NVIDIA hardware needed)
 - Lint: `ruff check .`
 - Format: `black .` and `ruff check --fix .`
 - Test: `pytest` (smoke tests only — no GPU required)
 
-Tests in `tests/` intentionally avoid touching NVML (they run on the GPU-less GitHub Actions runner). When adding new tests, keep them importable and CLI-level unless you also add a marker that a GPU-required integration suite can use.
+Tests in `tests/` intentionally avoid touching NVML (they run on the GPU-less GitHub Actions runner); pilot tests that need a running app drive it through demo mode (`DltopApp(..., demo_gpus=N)`) instead. When adding new tests, keep them importable and CLI-level unless you also add a marker that a GPU-required integration suite can use.
 
 ## Ruff config
 

@@ -47,6 +47,18 @@ def test_cli_help_via_module() -> None:
     assert "--interval" in result.stdout
 
 
+def test_cli_new_flags_in_help() -> None:
+    result = subprocess.run(["dltop", "--help"], capture_output=True, text=True, check=False, timeout=10)
+    for flag in ("--demo", "--window", "--no-discover", "--version"):
+        assert flag in result.stdout
+
+
+def test_cli_version() -> None:
+    result = subprocess.run(["dltop", "--version"], capture_output=True, text=True, check=False, timeout=10)
+    assert result.returncode == 0
+    assert result.stdout.startswith("dltop ")
+
+
 def test_readme_exists_and_is_non_trivial() -> None:
     """Guards pyproject.toml's `readme = "README.md"` claim against file loss."""
     readme = Path(__file__).resolve().parent.parent / "README.md"
@@ -56,65 +68,60 @@ def test_readme_exists_and_is_non_trivial() -> None:
 
 def test_public_constants_are_plausible() -> None:
     """Sanity-check DCGM field constants -- catches accidental list/dict drift."""
-    import dltop
+    from dltop.sources.dcgm import DCGM_FIELD_NAMES, DCGM_FIELD_ORDER
 
-    assert len(dltop.DCGM_FIELD_ORDER) == len(dltop.DCGM_FIELD_NAMES)
-    assert set(dltop.DCGM_FIELD_ORDER) == set(dltop.DCGM_FIELD_NAMES.keys())
+    assert len(DCGM_FIELD_ORDER) == len(DCGM_FIELD_NAMES)
+    assert set(DCGM_FIELD_ORDER) == set(DCGM_FIELD_NAMES.keys())
     # Names referenced elsewhere in the rendering code -- keep them stable.
     expected_names = {"sm_active", "tensor_active", "fp32_active", "fp16_active", "fp64_active"}
-    assert set(dltop.DCGM_FIELD_NAMES.values()) == expected_names
+    assert set(DCGM_FIELD_NAMES.values()) == expected_names
 
 
-def test_all_tab_combines_every_series_with_four_active() -> None:
-    """The default 'All' tab overlays every renderable series but enables only four.
+def test_all_tab_series_tables_are_all_active_by_default() -> None:
+    """The domain-grouped 'All' tab shows a Host chart + one chart per GPU.
 
-    WHY: 'All' is the first/default screen. If a future edit broke the concatenation
-    of the three tabs (dropping or duplicating a series) or changed the active set,
-    the user's very first view would silently lose a metric or open cluttered with
-    all 18 lines on. This pins the contract: every series present exactly once, and
-    only CPU / RAM / GPU SM / GPU VRAM visible by default.
+    WHY: Task 5 replaced the single overlaid "All" chart with one-domain-per-chart
+    stacks (host never mixes with a GPU's series). This pins the new contract: the
+    "all" key in both HOST_SERIES and the GPU series tables covers every metric in
+    that domain, and every series defaults to visible (each chart is scoped enough
+    that clutter is no longer a concern).
     """
-    import dltop
+    from dltop.models import GPU_SERIES_DCGM, GPU_SERIES_NVML, HOST_SERIES
 
-    app = dltop.CvtopApp(interval=0.5, no_dcgm=True)
-    app._compute_series = dltop.COMPUTE_SERIES_DCGM  # set by _prepare_sources() at compose time
-    series = app._all_series()
-    names = [name for name, _, _, _ in series]
-
-    expected = {name for name, _, _, _ in (*dltop.COMPUTE_SERIES_DCGM, *dltop.MEMORY_SERIES, *dltop.SYSTEM_SERIES)}
-    assert set(names) == expected, "All tab must contain every renderable series"
-    assert len(names) == len(set(names)), "no series may appear twice"
-    on_by_default = {name for name, _, _, default in series if default}
-    assert on_by_default == {"cpu", "ram", "sm", "vram"}
+    for table in (HOST_SERIES, GPU_SERIES_DCGM, GPU_SERIES_NVML):
+        for name, _, _, default in table["all"]:
+            assert default, f"{name!r} should default to visible"
 
 
 def test_clamp_pct_handles_nan_and_range() -> None:
     """Regression guard for the NaN check -- PLR0124 rewrite used math.isnan."""
     import math
 
-    import dltop
+    from dltop.models import _clamp_pct
 
-    assert dltop._clamp_pct(float("nan")) == 0.0
-    assert dltop._clamp_pct(-5.0) == 0.0
-    assert dltop._clamp_pct(150.0) == 100.0
-    assert dltop._clamp_pct(42.0) == 42.0
-    assert not math.isnan(dltop._clamp_pct(float("nan")))
+    assert _clamp_pct(float("nan")) == 0.0
+    assert _clamp_pct(-5.0) == 0.0
+    assert _clamp_pct(150.0) == 100.0
+    assert _clamp_pct(42.0) == 42.0
+    assert not math.isnan(_clamp_pct(float("nan")))
 
 
 def test_timeseries_plot_renders_before_first_push() -> None:
-    """Textual can paint TimeSeriesPlot during initial layout, before any push() runs.
+    """Textual can paint TimeSeriesPlot during initial layout, before the store has any data.
 
     WHY: the widget is composed inside a TabbedContent and gets a paint pass while
-    its ring buffers are still empty. If rasterising empty series raised (the old
+    its backing store is still empty. If rasterising empty series raised (the old
     plotext empty-state IndexError did, on short canvases), the whole TUI dies on
     the first frame. This guards the empty-data path: it must yield a valid canvas
     and a renderable, never an exception.
     """
     from rich.text import Text
 
-    import dltop
+    from dltop.metrics import MetricStore
+    from dltop.models import GPU_SERIES_DCGM
+    from dltop.widgets.plot import TimeSeriesPlot
 
-    plot = dltop.TimeSeriesPlot(dltop.COMPUTE_SERIES_DCGM, "test", "compute-plot")
+    plot = TimeSeriesPlot(MetricStore(), GPU_SERIES_DCGM["compute"], "test", "compute-plot")
     # Pure rasterisation must not raise with empty ring buffers...
     glyphs, owners = plot._rasterize(plot._visible_series(), 40, 40)
     assert isinstance(glyphs, dict)
@@ -133,9 +140,11 @@ def test_render_never_crashes_the_tui() -> None:
     """
     from rich.text import Text
 
-    import dltop
+    from dltop.metrics import MetricStore
+    from dltop.models import GPU_SERIES_DCGM
+    from dltop.widgets.plot import TimeSeriesPlot
 
-    plot = dltop.TimeSeriesPlot(dltop.COMPUTE_SERIES_DCGM, "boom", "compute-plot")
+    plot = TimeSeriesPlot(MetricStore(), GPU_SERIES_DCGM["compute"], "boom", "compute-plot")
 
     def explode() -> object:
         msg = "simulated draw failure"
@@ -160,15 +169,20 @@ def test_overlapping_series_are_never_hidden() -> None:
     """
     import time
 
-    import dltop
+    from dltop.metrics import MetricStore
+    from dltop.models import GPU_SERIES_DCGM
+    from dltop.widgets.plot import TimeSeriesPlot
 
-    plot = dltop.TimeSeriesPlot(dltop.COMPUTE_SERIES_NVML, "test", "compute-plot")
-    names = [s[0] for s in dltop.COMPUTE_SERIES_NVML]
+    store = MetricStore()
+    series = GPU_SERIES_DCGM["compute"]
+    plot = TimeSeriesPlot(store, series, "test", "compute-plot")
+    names = [s[0] for s in series]
     now = time.time()
     # First two series share the exact same value; the rest sit at 0%.
     values = {names[0]: 50.0, names[1]: 50.0, names[2]: 0.0, names[3]: 0.0}
     for name, val in values.items():
-        plot._data[name].extend([(now, val), (now + 1, val)])
+        store.record(name, val, ts=now)
+        store.record(name, val, ts=now + 1)
 
     vis = plot._visible_series()
     idx = {name: i for i, (name, _, _) in enumerate(vis)}
