@@ -52,12 +52,15 @@ async def test_window_band_aligns_with_stat_columns() -> None:
 async def test_copy_buttons_export_each_format(monkeypatch: pytest.MonkeyPatch) -> None:
     app = await _demo_app_with_data()
     copied: list[str] = []
-    # Patch the clipboard seam the widget imports, so the test captures the text
-    # without actually shelling out to a system clipboard tool.
-    monkeypatch.setattr(
-        "dltop.widgets.stats_table.copy_to_clipboard",
-        lambda _app, text: copied.append(text),
-    )
+
+    # Patch the clipboard seam the widget imports, so the test captures the copied
+    # content without actually shelling out to a system clipboard tool. For the
+    # web-table button the meaningful payload is the rich html kwarg.
+    def _capture(_app: object, text: str, *, html: str | None = None) -> bool:
+        copied.append(html if html is not None else text)
+        return html is not None
+
+    monkeypatch.setattr("dltop.widgets.stats_table.copy_to_clipboard", _capture)
     async with app.run_test(size=(140, 50)) as pilot:
         await pilot.pause()
         for _ in range(3):

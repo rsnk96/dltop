@@ -92,11 +92,25 @@ class StatsTable(Vertical):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Copy the current snapshot in the pressed button's format."""
         rows = self._rows_provider()
+        if event.button.id == "copy-html":
+            # Set a rich text/html clipboard flavor so Teams/email/Word render a
+            # real table; fall back to a readable markdown table (not raw <table>
+            # markup) where rich paste isn't possible, e.g. over SSH.
+            rich = copy_to_clipboard(
+                self.app,
+                to_markdown(rows, self._window_s),
+                html=to_html(rows, self._window_s),
+            )
+            msg = (
+                "Copied web table — paste into Teams/email/Word ✓"
+                if rich
+                else "Copied web table as text (rich HTML needs a local terminal, not SSH) ✓"
+            )
+            self.notify(msg, timeout=4)
+            return
         match event.button.id:
             case "copy-md":
                 text, what = to_markdown(rows, self._window_s), "Markdown"
-            case "copy-html":
-                text, what = to_html(rows, self._window_s), "web table (HTML)"
             case "copy-tsv":
                 text, what = to_tsv(rows, self._window_s), "Excel table (TSV)"
             case "copy-meta":
