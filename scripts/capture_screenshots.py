@@ -45,6 +45,8 @@ async def _capture(warmup: float, size: tuple[int, int], interval: float) -> dic
         start = time.monotonic()
         while time.monotonic() - start < warmup:  # noqa: ASYNC110 - polling wall-clock warm-up, not an event
             await asyncio.sleep(interval)
+        # Drop focus so no widget shows its focus ring/underline in the still.
+        app.set_focus(None)
         for tab in TABS:
             app.query_one("#tabs").active = tab
             await pilot.pause()
